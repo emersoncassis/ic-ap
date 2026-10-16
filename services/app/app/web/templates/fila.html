@@ -2,6 +2,7 @@
 {% block body %}
 <h1>Fila de posts</h1>
 <p class="sub">{{ perfil.nome if perfil else '—' }}{% if perfil and not perfil.ativo %} · <span class="err">perfil desligado: o agendador não gera posts</span>{% endif %}</p>
+{% if sem_llm %}<div class="flash aviso">Nenhum modelo de linguagem configurado. <a href="/llm">Configure em LLM</a> antes de gerar posts.</div>{% endif %}
 {% if perfil %}
 <form method="post" action="/gerar" style="margin-bottom:20px">
   <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}">

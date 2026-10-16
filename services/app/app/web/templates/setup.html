@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block title %}Primeiros passos · ic-ap{% endblock %}
+{% block body %}
+<div class="card" style="max-width:440px;margin:70px auto 0">
+  <h1>Bem-vindo ao ic-ap</h1>
+  <p class="sub">Crie a senha do painel. Todo o resto você configura aqui dentro: modelo de linguagem, Instagram, Telegram e túnel.</p>
+  {% if erro %}<div class="flash erro">{{ erro }}</div>{% endif %}
+  <form method="post" action="/setup">
+    <label>Senha (mínimo 8 caracteres)</label><input type="password" name="senha" autofocus required minlength="8">
+    <label>Repita a senha</label><input type="password" name="senha2" required minlength="8">
+    <div class="acts"><button type="submit">Criar e entrar</button></div>
+  </form>
+  <p class="mut" style="margin-top:16px;font-size:13px">Dica: esta tela só aparece uma vez e só é acessível neste computador (porta local).</p>
+</div>
+{% endblock %}

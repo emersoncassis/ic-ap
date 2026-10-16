@@ -1,22 +1,24 @@
 # ic-ap
 
-Esteira local de conteúdo para Instagram: lê notícias, reage com a minha voz e contexto usando um LLM local, renderiza o post (HTML → JPEG), manda para aprovação no Telegram e publica pela Instagram Graph API oficial.
+Esteira local de conteúdo para Instagram: lê notícias, reage com a minha voz e contexto usando um LLM (local ou API, à sua escolha), renderiza o post (HTML → JPEG), manda para aprovação no Telegram e publica pela Instagram Graph API oficial.
 
-> Status: app Python com painel web, pipeline completo (RSS → extração → LLM → card → aprovação → publicação), Telegram e agendador. **Testado ponta a ponta com serviços simulados (16 testes), ainda não contra a Meta, o Telegram e o Ollama reais.**
+> Status: app Python com painel web, pipeline completo (RSS → extração → LLM → card → aprovação → publicação), Telegram e agendador. Toda a configuração é feita no painel web (sem `.env`). **Testado ponta a ponta com serviços simulados (31 testes), ainda não contra a Meta, o Telegram, um LLM real e o Docker.**
 
 ![exemplo do card](docs/exemplo-card.jpg)
 
 ## Subir
 
 ```bash
-cp .env.example .env      # preencher (APP_SECRET_KEY, ADMIN_PASSWORD, túnel, tokens)
 docker compose up -d --build
-docker compose exec ollama ollama pull qwen2.5:7b-instruct
 ```
 
-Abra http://localhost:8000, entre com a senha, vá em **Conexões** e teste Meta, Ollama, Telegram e URL pública. Só então ligue o perfil em **Perfis**. O perfil do Emerson nasce **desligado** de propósito.
+Abra http://localhost:8000. No primeiro acesso o app pede para **criar a senha** (e gera sozinho a chave de criptografia em `data/secret.key`; faça backup da pasta `data/`). Depois, tudo no painel:
 
-Pré-requisitos: Docker Desktop com WSL2 e GPU NVIDIA; túnel nomeado na Cloudflare apontando para `http://public:80` (veja `docs/cloudflare-tunnel.md`).
+1. **LLM:** rode seu LLM fora do app (LM Studio, Ollama, Jan, Gemini, Claude...). Informe tipo e endereço, clique **Detectar modelos**, escolha um e **Aplicar e testar**. Do container, use `host.docker.internal` no lugar de `localhost`.
+2. **Conexões e acesso:** token do túnel Cloudflare (`docs/cloudflare-tunnel.md`), URL pública, token do bot do Telegram, fuso horário.
+3. **Perfis:** dados do perfil, Telegram chat id, horários, contexto, conexão de LLM e o assistente de token da Meta. O perfil do Emerson nasce **desligado**; ligue só depois de testar tudo em **Conexões**.
+
+Esqueceu a senha: `docker compose exec app python -m app.reset_senha`.
 
 ## Testes
 

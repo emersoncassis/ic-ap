@@ -43,7 +43,7 @@ Informado: RTX 5070 + Intel Core Ultra 7. **VRAM confirmada: 8 GB** (RTX 5070 de
 | 24 GB+ | ~32B. Melhor fidelidade ao seu estilo |
 | Sem GPU | Roda na CPU, mas lento (minutos por post). Aceitável para 1–3 posts/dia, já que não precisa ser em tempo real |
 
-**Decisão para 8 GB:** o teto realista é um modelo de ~7–8B quantizado, que funciona para JSON e português, mas imita pior o tom de voz. Por isso o passo de reação terá **provedor configurável**: Ollama local por padrão, com troca por API de nuvem (Gemini ou Anthropic) via variável de ambiente, só nesse passo. O resto da esteira continua local. Observação: a assinatura do Claude Code serve para desenvolver o projeto, mas não substitui uma chave de API para rodar a esteira sozinha. Para usar Claude em produção seria uma chave da API da Anthropic, paga por uso.
+**Decisão para 8 GB:** o teto realista é um modelo de ~7–8B quantizado, que funciona para JSON e português, mas imita pior o tom de voz. Por isso o passo de reação terá **provedor configurável**: Ollama local por padrão, com troca por API de nuvem (Gemini ou Anthropic) pela aba LLM do painel, só nesse passo. O resto da esteira continua local. Observação: a assinatura do Claude Code serve para desenvolver o projeto, mas não substitui uma chave de API para rodar a esteira sozinha. Para usar Claude em produção seria uma chave da API da Anthropic, paga por uso.
 
 Também com 8 GB: não rodar ComfyUI/Flux ao mesmo tempo que o Ollama (disputam a VRAM). Imagem de fundo por IA fica fora da v1.
 

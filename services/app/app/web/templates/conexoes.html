@@ -1,9 +1,58 @@
 {% extends "base.html" %}{% block title %}Conexões · ic-ap{% endblock %}
 {% block body %}
-<h1>Conexões</h1><p class="sub">Teste cada ligação antes de ligar o perfil{% if perfil %}: <b>{{ perfil.nome }}</b>{% endif %}.</p>
-{% if perfil %}
+<h1>Conexões e acesso</h1>
+<p class="sub">Tudo que o app precisa para falar com o mundo, configurado aqui. Os segredos ficam criptografados.</p>
+
+<h2 style="margin-top:0">URL pública das imagens</h2>
 <div class="grid">
-{% for alvo, tit, desc in [('meta','Instagram (Meta)','Confere o token e o IG_USER_ID, e mostra a conta.'),('ollama','Ollama (modelo local)','Confere se o servidor responde e o modelo está instalado.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('publico','URL pública (túnel)','Grava um arquivo de teste e busca pela internet em ' ~ (base or '— PUBLIC_BASE_URL vazia —') ~ '.')] %}
+<div class="card">
+  <p class="mut" style="margin-top:0">A Meta busca a imagem do post por uma URL pública. O app serve só a pasta de imagens temporárias na porta interna <b>8081</b>; o túnel da Cloudflare leva a internet até ela.</p>
+  <form method="post" action="/config/publico"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Endereço público (ex.: https://img.seudominio.com)</label><input name="public_base_url" value="{{ base }}" placeholder="https://img.seudominio.com">
+    <div class="acts"><button type="submit">Salvar endereço</button></div>
+  </form>
+</div>
+<div class="card">
+  <b>Túnel Cloudflare</b>
+  <span class="badge {{ 'publicado' if tunel.status=='conectado' else ('falhou' if tunel.status in ('erro','caiu') else '') }}">{{ tunel.status }}</span>
+  <p class="mut" style="margin:6px 0 0">Cole o token do túnel (veja o passo a passo no README). No painel da Cloudflare, a rota do túnel deve apontar para <code>http://localhost:8081</code>.</p>
+  <form method="post" action="/config/tunel"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Token do túnel {% if tem_tunel %}<small>(já configurado; cole outro para trocar)</small>{% endif %}</label>
+    <input type="password" name="tunnel_token" autocomplete="off">
+    <div class="acts"><button type="submit">Salvar token</button>
+      {% if tem_tunel %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
+  </form>
+  {% if tunel.linhas %}<pre class="mut" style="font-size:12px;white-space:pre-wrap;margin:12px 0 0">{{ tunel.linhas|join('\n') }}</pre>{% endif %}
+</div>
+</div>
+
+<h2>Telegram (aprovação pelo celular)</h2>
+<div class="card">
+  <p class="mut" style="margin-top:0">Crie um bot com o @BotFather, cole o token aqui e informe o chat_id de cada pessoa na tela do perfil.</p>
+  <form method="post" action="/config/telegram"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Token do bot {% if tg_token %}<small>(atual: {{ tg_token }})</small>{% endif %}</label>
+    <input type="password" name="telegram_token" autocomplete="off">
+    <div class="acts"><button type="submit">Salvar token</button>
+      {% if tg_token %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
+  </form>
+</div>
+
+<h2>Geral</h2>
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+<form method="post" action="/config/geral" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Fuso horário (usado nos horários dos perfis)</label><input name="tz" value="{{ tz }}">
+  <div class="acts"><button type="submit">Salvar</button></div></form>
+<form method="post" action="/config/senha" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Senha atual</label><input type="password" name="atual" required>
+  <div class="row"><div><label>Nova senha</label><input type="password" name="nova" required minlength="8"></div>
+  <div><label>Repita</label><input type="password" name="nova2" required minlength="8"></div></div>
+  <div class="acts"><button class="sec" type="submit">Alterar senha</button></div></form>
+</div>
+
+<h2>Testes do perfil{% if perfil %}: {{ perfil.nome }}{% endif %}</h2>
+{% if perfil %}
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+{% for alvo, tit, desc in [('llm','Modelo de linguagem','Gera uma reação de exemplo com a conexão deste perfil.'),('meta','Instagram (Meta)','Confere o token e o IG_USER_ID e mostra a conta.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('publico','URL pública','Grava um arquivo de teste e busca pela internet.')] %}
   <div class="card"><b>{{ tit }}</b><p class="mut" style="margin:4px 0 10px">{{ desc }}</p>
     <form method="post" action="/conexoes/{{ alvo }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}"><button class="sec" type="submit">Testar</button></form></div>
 {% endfor %}

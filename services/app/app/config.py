@@ -1,4 +1,4 @@
-"""Configuração lida do ambiente (.env)."""
+"""Só caminhos e ganchos técnicos. Toda a configuração do usuário vive no banco e é editada pela interface."""
 import os
 from pathlib import Path
 
@@ -8,25 +8,21 @@ def env(k: str, d: str = "") -> str:
 
 
 DATA = Path(env("DATA_DIR", "/data"))
-PUBLIC = DATA / "public"      # servido pelo nginx/túnel, só no momento do publish
+PUBLIC = DATA / "public"      # servido na porta interna PUBLIC_PORT (e exposto só pelo túnel), apenas no momento do publish
 CARDS = DATA / "cards"        # cards privados (preview no painel)
 DB_PATH = DATA / "app.db"
+SECRET_FILE = DATA / "secret.key"
 CARD_TEMPLATES = Path(env("TEMPLATES_DIR", "/srv/card-templates"))
-CONTEXT_FILE = Path(env("CONTEXT_FILE", "/context/meu_contexto.md"))
-FEEDS_FILE = Path(env("FEEDS_FILE", "/config/feeds.yml"))
-BASE_URL = env("PUBLIC_BASE_URL").rstrip("/")
-TZ = env("TZ", "America/Sao_Paulo")
+CONTEXT_FILE = Path(env("CONTEXT_FILE", "/context/meu_contexto.md"))   # só semente do perfil inicial
+FEEDS_FILE = Path(env("FEEDS_FILE", "/config/feeds.yml"))              # só semente dos feeds iniciais
 CHROMIUM = env("CHROMIUM_PATH") or None
+PUBLIC_PORT = int(env("PUBLIC_PORT", "8081"))
+CLOUDFLARED_BIN = env("CLOUDFLARED_BIN", "cloudflared")
 
-OLLAMA_URL = env("OLLAMA_URL", "http://ollama:11434").rstrip("/")
-OLLAMA_MODEL = env("OLLAMA_MODEL", "qwen2.5:7b-instruct")
-GEMINI_API_BASE = env("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
-ANTHROPIC_API_BASE = env("ANTHROPIC_API_BASE", "https://api.anthropic.com/v1")
-
-IG_BASE = env("IG_GRAPH_BASE") or (
-    f"https://{env('IG_API_HOST', 'graph.facebook.com')}/{env('IG_GRAPH_VERSION', 'v23.0')}")
+# Endpoints de terceiros (sobrescritos nos testes)
+IG_BASE = env("IG_GRAPH_BASE") or f"https://graph.facebook.com/{env('IG_GRAPH_VERSION', 'v23.0')}"
 IG_POLL_SECONDS = float(env("IG_POLL_SECONDS", "5"))
 IG_POLL_TRIES = int(env("IG_POLL_TRIES", "12"))
-
 TELEGRAM_API = env("TELEGRAM_API_BASE", "https://api.telegram.org")
-TELEGRAM_TOKEN = env("TELEGRAM_BOT_TOKEN")
+GEMINI_API_BASE = env("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
+ANTHROPIC_API_BASE = env("ANTHROPIC_API_BASE", "https://api.anthropic.com/v1")

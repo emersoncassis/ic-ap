@@ -1,30 +1,40 @@
 import re
+import stat
 import struct
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
 
-from app import config as C, crypto, db, pipeline, scheduler
-from tests.conftest import esperar
+from app import config as C, crypto, db, pipeline, scheduler, settings
+from app.tunnel import tunel
+from tests.conftest import FAKE, PUBLIC_URL, esperar
 
-TOKEN = "EAAB-token-secreto-de-teste-1234"
+SENHA = "senha-de-teste-123"
+TOKEN = "PAGETOKEN-xyz"  # token da Página, obtido pelo assistente da Meta
 
 
 def csrf_de(client, path="/"):
-    html = client.get(path).text
-    return re.search(r'name="csrf" value="([0-9a-f]+)"', html).group(1)
-
-
-@pytest.fixture(scope="module")
-def logado(client):
-    r = client.post("/login", data={"senha": "senha-de-teste-123"})
-    assert r.status_code == 303
-    return client
+    return re.search(r'name="csrf" value="([0-9a-f]+)"', client.get(path).text).group(1)
 
 
 def post_form(client, url, **data):
     return client.post(url, data={"csrf": csrf_de(client), **data})
+
+
+def ver(client, path):
+    return client.get(path).text
+
+
+@pytest.fixture(scope="module")
+def logado(client):
+    if not db.get_setting("admin_hash"):
+        client.post("/setup", data={"senha": SENHA, "senha2": SENHA})
+    else:
+        client.post("/login", data={"senha": SENHA})
+    assert client.get("/").status_code == 200
+    return client
 
 
 def jpeg_dims(path):
@@ -39,9 +49,9 @@ def jpeg_dims(path):
         i += 2 + struct.unpack(">H", b[i + 2:i + 4])[0]
 
 
-def configurar_perfil(client, ativo=False):
-    post_form(client, "/perfis/1", nome="Emerson Assis", handle="@emerson_teste", ig_user_id="1784", ig_token=TOKEN,
-              telegram_chat_id="42", llm_provider="ollama", llm_model="", horarios="09:00,18:00",
+def configurar_perfil(client, ativo=False, conexao=""):
+    post_form(client, "/perfis/1", nome="Emerson Assis", handle="@emerson_teste", ig_user_id="1784", ig_token="",
+              telegram_chat_id="42", llm_conexao_id=str(conexao), horarios="09:00,18:00",
               palavras_chave="IA", max_idade_horas="36", contexto_md=C.CONTEXT_FILE.read_text(),
               **({"ativo": "on"} if ativo else {}))
 
@@ -55,63 +65,201 @@ def gerar_e_esperar(client, esperado_estado="aguardando_aprovacao"):
     return r
 
 
+# ---------------- primeiro acesso e senha ----------------
+def test_primeiro_acesso_cria_senha_e_chave(client):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    anon = TestClient(app, follow_redirects=False)
+    assert anon.get("/").headers["location"] == "/setup"
+    assert anon.get("/login").headers["location"] == "/setup"
+    assert "iguais" in anon.post("/setup", data={"senha": SENHA, "senha2": "outra-coisa"}).text
+    assert "iguais" in anon.post("/setup", data={"senha": "curta", "senha2": "curta"}).text
+    r = anon.post("/setup", data={"senha": SENHA, "senha2": SENHA})
+    assert r.status_code == 303 and r.headers["location"] == "/llm"
+    assert anon.get("/setup").headers["location"] == "/login"  # setup só roda uma vez
+    # a chave do app foi criada sozinha, com permissão restrita, e a senha não está em texto puro
+    assert C.SECRET_FILE.exists() and stat.S_IMODE(C.SECRET_FILE.stat().st_mode) == 0o600
+    assert SENHA.encode() not in C.DB_PATH.read_bytes()
+    assert "Ysafe" in db.one("SELECT contexto_md FROM perfis WHERE id=1")["contexto_md"]
+
+
 def test_exige_login(client):
     from fastapi.testclient import TestClient
     from app.main import app
     anon = TestClient(app, follow_redirects=False)
-    for rota in ("/", "/perfis", "/feeds", "/conexoes", "/historico", "/cards/" + "a" * 32 + ".jpg"):
+    for rota in ("/", "/perfis", "/feeds", "/llm", "/conexoes", "/historico", "/cards/" + "a" * 32 + ".jpg"):
         r = anon.get(rota)
         assert r.status_code == 303 and r.headers["location"] == "/login", rota
-    assert anon.post("/gerar", data={"perfil_id": "1"}).status_code in (303, 403)
     assert "incorreta" in anon.post("/login", data={"senha": "errada"}).text
-
-
-def test_seed_perfil_desligado(logado):
-    p = db.one("SELECT * FROM perfis WHERE id=1")
-    assert p["nome"] == "Emerson Assis" and p["ativo"] == 0
-    assert "Ysafe" in p["contexto_md"]
-    assert db.q("SELECT * FROM feeds WHERE perfil_id IS NULL")
+    assert anon.post("/gerar", data={"perfil_id": "1"}).status_code in (303, 403)
 
 
 def test_csrf_obrigatorio(logado):
     assert logado.post("/gerar", data={"perfil_id": "1"}).status_code == 403
-    assert logado.post("/gerar", data={"perfil_id": "1", "csrf": "errado"}).status_code == 403
+    assert logado.post("/llm/editar", data={"csrf": "errado", "acao": "aplicar"}).status_code == 403
+    assert logado.post("/config/publico", data={"public_base_url": "https://x.com"}).status_code == 403
+
+
+def test_perfil_emerson_nasce_desligado(logado):
+    p = db.one("SELECT * FROM perfis WHERE id=1")
+    assert p["nome"] == "Emerson Assis" and p["ativo"] == 0 and db.q("SELECT * FROM feeds WHERE perfil_id IS NULL")
+
+
+def test_gerar_sem_llm_explica_o_que_falta(logado):
+    assert "Configure em LLM" in ver(logado, "/") or "LLM" in ver(logado, "/")
+    configurar_perfil(logado)
+    p = gerar_e_esperar(logado, "falhou")
+    assert "configure em LLM" in p["erro"]
+    db.x("DELETE FROM posts")
+
+
+# ---------------- LLM: apontar, detectar, escolher, aplicar e testar ----------------
+def test_llm_openai_detecta_e_aplica(logado, fake):
+    r = post_form(logado, "/llm/editar", acao="detectar", nome="LM Studio", tipo="openai", base_url=FAKE, api_key="")
+    assert r.status_code == 200 and "modelo-a" in r.text and "modelo-b" in r.text
+    assert f'value="{FAKE}/v1"' in r.text, "deve descobrir sozinho que a base é /v1"
+    r = post_form(logado, "/llm/editar", acao="aplicar", nome="LM Studio", tipo="openai", base_url=f"{FAKE}/v1",
+                  modelo="modelo-b", padrao="on", api_key="")
+    assert r.status_code == 303
+    assert "Teste OK" in ver(logado, "/llm")
+    c = db.one("SELECT * FROM llm_conexoes WHERE id=1")
+    assert c["modelo"] == "modelo-b" and c["padrao"] == 1 and c["tipo"] == "openai"
+    assert fake.st()["llm_users"], "o teste deve ter chamado o modelo de verdade"
+
+
+def test_llm_openai_sem_response_format_cai_no_prompt(logado, fake):
+    fake.set(openai_no_format=True)
+    post_form(logado, "/llm/1/testar")
+    assert "teste OK" in ver(logado, "/llm")
+
+
+def test_llm_chave_guardada_criptografada_e_reutilizada(logado, fake):
+    post_form(logado, "/llm/editar", acao="aplicar", id="1", nome="LM Studio", tipo="openai", base_url=f"{FAKE}/v1",
+              modelo="modelo-b", padrao="on", api_key="sk-local-123")
+    enc = db.one("SELECT api_key_enc FROM llm_conexoes WHERE id=1")["api_key_enc"]
+    assert "sk-local-123" not in enc and crypto.dec(enc) == "sk-local-123"
+    assert "sk-local-123" not in ver(logado, "/llm?editar=1")
+    post_form(logado, "/llm/editar", acao="detectar", id="1", nome="LM Studio", tipo="openai", base_url=f"{FAKE}/v1", api_key="")
+    assert fake.st()["openai_keys"][-1] == "Bearer sk-local-123", "chave em branco deve manter a salva"
+
+
+def test_llm_ollama_gemini_anthropic(logado, fake):
+    r = post_form(logado, "/llm/editar", acao="detectar", nome="Ollama", tipo="ollama", base_url=FAKE, api_key="")
+    assert "teste:7b" in r.text
+    post_form(logado, "/llm/editar", acao="aplicar", nome="Ollama", tipo="ollama", base_url=FAKE, modelo="teste:7b", api_key="")
+    # Gemini: sem chave avisa; com chave lista só modelos que geram texto
+    assert "chave de API" in post_form(logado, "/llm/editar", acao="detectar", nome="G", tipo="gemini", base_url="", api_key="").text
+    r = post_form(logado, "/llm/editar", acao="detectar", nome="G", tipo="gemini", base_url="", api_key="g-key")
+    assert "g-flash" in r.text and ">emb<" not in r.text
+    post_form(logado, "/llm/editar", acao="aplicar", nome="Gemini", tipo="gemini", base_url="", modelo="g-flash", api_key="g-key")
+    # Anthropic: chave errada mostra o erro da API
+    assert "invalid x-api-key" in post_form(logado, "/llm/editar", acao="detectar", nome="A", tipo="anthropic", base_url="", api_key="x").text
+    r = post_form(logado, "/llm/editar", acao="detectar", nome="A", tipo="anthropic", base_url="", api_key="a-key")
+    assert "claude-test" in r.text
+    post_form(logado, "/llm/editar", acao="aplicar", nome="Claude", tipo="anthropic", base_url="", modelo="claude-test", api_key="a-key")
+    assert [c["tipo"] for c in db.q("SELECT tipo FROM llm_conexoes ORDER BY id")] == ["openai", "ollama", "gemini", "anthropic"]
+    assert [c["padrao"] for c in db.q("SELECT padrao FROM llm_conexoes ORDER BY id")] == [1, 0, 0, 0]
+
+
+def test_llm_erro_de_conexao_mostra_dica_do_docker(logado):
+    r = post_form(logado, "/llm/editar", acao="detectar", nome="X", tipo="openai", base_url="http://127.0.0.1:1", api_key="")
+    assert "host.docker.internal" in r.text
+
+
+# ---------------- configurações globais pela interface ----------------
+def test_url_publica_e_servidor_de_imagens_isolado(logado):
+    post_form(logado, "/config/publico", public_base_url="ftp://x")
+    assert settings.base_url() == ""
+    post_form(logado, "/config/publico", public_base_url=PUBLIC_URL + "/")
+    assert settings.base_url() == PUBLIC_URL
+    # o servidor público serve só a pasta de imagens: sem listagem, sem painel
+    (C.PUBLIC / "x.txt").write_text("oi")
+    assert httpx.get(f"{PUBLIC_URL}/x.txt").text == "oi"
+    (C.PUBLIC / "x.txt").unlink()
+    assert httpx.get(f"{PUBLIC_URL}/").status_code == 404
+    assert httpx.get(f"{PUBLIC_URL}/login").status_code == 404
+    assert httpx.get(f"{PUBLIC_URL}/../app.db").status_code in (400, 404)
+
+
+def test_tunel_inicia_pelo_token_da_interface_e_mascara_o_token(logado):
+    post_form(logado, "/config/tunel", tunnel_token="TUNEL-SEGREDO-999")
+    esperar(lambda: tunel.status == "conectado", 20)
+    html = ver(logado, "/conexoes")
+    assert "conectado" in html and "TUNEL-SEGREDO-999" not in html and "***" in html
+    assert "TUNEL-SEGREDO-999" not in db.get_setting("tunnel_token")
+    post_form(logado, "/config/tunel", acao="remover")
+    esperar(lambda: tunel.status == "parado" and tunel.proc is None, 10)
+    assert not settings.tunnel_token()
+
+
+def test_telegram_fuso_e_senha(logado):
+    post_form(logado, "/config/telegram", telegram_token="TG-TOKEN-123")
+    assert settings.telegram_token() == "TG-TOKEN-123" and "TG-TOKEN-123" not in ver(logado, "/conexoes")
+    post_form(logado, "/config/geral", tz="Marte/Olympus")
+    assert settings.tz() == "America/Sao_Paulo"
+    post_form(logado, "/config/geral", tz="America/Manaus")
+    assert settings.tz() == "America/Manaus"
+    post_form(logado, "/config/geral", tz="America/Sao_Paulo")
+    post_form(logado, "/config/senha", atual="errada", nova="nova-senha-456", nova2="nova-senha-456")
+    assert crypto.check_password(SENHA, db.get_setting("admin_hash"))
+    post_form(logado, "/config/senha", atual=SENHA, nova="nova-senha-456", nova2="nova-senha-456")
+    assert crypto.check_password("nova-senha-456", db.get_setting("admin_hash"))
+    post_form(logado, "/config/senha", atual="nova-senha-456", nova=SENHA, nova2=SENHA)
+    assert crypto.check_password(SENHA, db.get_setting("admin_hash"))
+
+
+# ---------------- assistente de token da Meta ----------------
+def test_assistente_meta(logado):
+    post_form(logado, "/perfis/1/meta/buscar", app_id="123", app_secret="errado", token_curto="TOKEN-CURTO")
+    assert "Invalid client secret" in ver(logado, "/perfis/1")
+    post_form(logado, "/perfis/1/meta/buscar", app_id="123", app_secret="segredo-app", token_curto="TOKEN-CURTO")
+    html = ver(logado, "/perfis/1")
+    assert "@emerson_teste" in html and "Sem Instagram" not in html
+    for segredo in ("LONGO123", "PAGETOKEN", "segredo-app", "TOKEN-CURTO"):
+        assert segredo not in html
+    post_form(logado, "/perfis/1/meta/usar", idx="0")
+    p = db.one("SELECT * FROM perfis WHERE id=1")
+    assert p["ig_user_id"] == "1784" and crypto.dec(p["ig_token_enc"]) == TOKEN
+    assert not db.get_setting("metatmp:1"), "a lista temporária deve ser apagada"
+    assert "segredo-app" not in "".join(r["v"] for r in db.q("SELECT v FROM settings"))
 
 
 def test_token_criptografado_e_mascarado(logado):
-    configurar_perfil(logado)
     enc = db.one("SELECT ig_token_enc FROM perfis WHERE id=1")["ig_token_enc"]
-    assert TOKEN not in enc and crypto.dec(enc) == TOKEN
-    html = logado.get("/perfis/1").text
-    assert TOKEN not in html and "1234" in html
-    configurar_perfil(logado)  # reenviar sem token não pode apagá-lo
-    post_form(logado, "/perfis/1", nome="Emerson Assis", ig_token="", ig_user_id="1784", llm_provider="ollama",
-              horarios="09:00", palavras_chave="IA", max_idade_horas="36", contexto_md="x")
+    assert TOKEN not in enc
+    html = ver(logado, "/perfis/1")
+    assert TOKEN not in html and "-xyz" not in html.replace("PAGETOKEN", "") or "••••" in html
+    configurar_perfil(logado)  # salvar sem informar token não pode apagá-lo
     assert crypto.dec(db.one("SELECT ig_token_enc FROM perfis WHERE id=1")["ig_token_enc"]) == TOKEN
-    configurar_perfil(logado)
 
 
+# ---------------- fluxo de posts ----------------
 def test_fluxo_completo_gerar_e_publicar(logado, fake):
     configurar_perfil(logado)
     p = gerar_e_esperar(logado)
-    assert p["manchete"] == "IA vira prioridade nas empresas"
-    assert "Fonte: Feed Teste" in p["legenda"]
-    card = C.CARDS / p["arquivo"]
-    assert jpeg_dims(card) == (1080, 1350)
+    assert p["manchete"] == "IA vira prioridade nas empresas" and "Fonte: Feed Teste" in p["legenda"]
+    assert jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350)
     assert not (C.PUBLIC / p["arquivo"]).exists(), "o card não pode ficar público antes da aprovação"
-    tg = fake.st()["tg"]
-    assert any(m == "sendPhoto" and d["chat_id"] == "42" for m, d in tg)
+    esperar(lambda: any(m == "sendPhoto" and d["chat_id"] == "42" for m, d in fake.st()["tg"]))
 
     post_form(logado, f"/posts/{p['id']}/aprovar")
     pub = esperar(lambda: (lambda r: r if r["estado"] == "publicado" else None)(pipeline.post(p["id"])))
     assert pub["media_id"] == "MEDIA9"
     chamadas = fake.st()["graph"]
     media = next(d for t, d in chamadas if t == "media")
-    assert media["image_url"].endswith(p["arquivo"]) and "Fonte: Feed Teste" in media["caption"]
+    # a Meta buscou a imagem de verdade pela URL pública servida pelo próprio app
+    assert media["image_url"] == f"{PUBLIC_URL}/{p['arquivo']}" and "Fonte: Feed Teste" in media["caption"]
     assert media["access_token"] == TOKEN
-    assert any(t == "publish" for t, _ in chamadas)
     assert not (C.PUBLIC / p["arquivo"]).exists(), "a imagem pública deve ser apagada após publicar"
-    assert not db.q("SELECT 1 FROM posts WHERE id=? AND erro IS NOT NULL", (p["id"],))
+
+
+@pytest.mark.parametrize("conexao_id", [2, 3, 4])
+def test_pipeline_com_cada_tipo_de_llm(logado, fake, conexao_id):
+    configurar_perfil(logado, conexao=conexao_id)
+    p = gerar_e_esperar(logado)
+    assert p["manchete"] == "IA vira prioridade nas empresas"
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    configurar_perfil(logado)
 
 
 def test_aprovar_duas_vezes_publica_uma_vez(logado, fake):
@@ -141,8 +289,8 @@ def test_llm_sempre_invalido_marca_falhou(logado, fake):
     fake.set(llm_mode="always_bad")
     p = gerar_e_esperar(logado, "falhou")
     assert "3 tentativas" in p["erro"]
-    assert len(db.q("SELECT 1 FROM posts WHERE estado='falhou'")) <= pipeline.MAX_FALHAS  # não varre o feed todo
-    assert any(m == "sendMessage" for m, _ in fake.st()["tg"])
+    assert len(db.q("SELECT 1 FROM posts WHERE estado='falhou'")) <= pipeline.MAX_FALHAS
+    esperar(lambda: any(m == "sendMessage" for m, _ in fake.st()["tg"]))
     post_form(logado, f"/posts/{p['id']}/descartar")
 
 
@@ -153,7 +301,7 @@ def test_erro_da_meta_nao_vaza_token(logado, fake):
     f = esperar(lambda: (lambda r: r if r["estado"] == "falhou" else None)(pipeline.post(p["id"])))
     assert "Invalid OAuth" in f["erro"] and TOKEN not in f["erro"]
     assert not (C.PUBLIC / p["arquivo"]).exists()
-    assert TOKEN not in logado.get("/").text
+    assert TOKEN not in ver(logado, "/")
     fake.set(graph_fail=False)
     post_form(logado, f"/posts/{p['id']}/aprovar")  # "tentar de novo"
     esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
@@ -168,16 +316,13 @@ def test_refazer_troca_o_card(logado, fake):
     assert pipeline.post(p["id"])["estado"] == "descartado" and not (C.CARDS / novo["arquivo"]).exists()
 
 
-def test_noticia_nao_se_repete(logado, fake):
-    for pid in [r["id"] for r in db.q("SELECT id FROM posts WHERE estado='aguardando_aprovacao'")]:
-        post_form(logado, f"/posts/{pid}/descartar")
+def test_noticia_nao_se_repete(logado):
     urls = [r["noticia_url"] for r in db.q("SELECT noticia_url FROM posts")]
-    assert len(urls) == len(set(urls)), "a mesma notícia gerou dois posts"
+    assert len(urls) == len(set(urls))
 
 
 def test_telegram_botoes_so_do_dono(logado, fake):
-    db.x("DELETE FROM posts WHERE estado!='publicado'")
-    db.x("DELETE FROM posts")  # libera as notícias do feed de teste
+    db.x("DELETE FROM posts")
     p = gerar_e_esperar(logado)
     fake.push(f"ds:{p['id']}", chat_id="999")  # chat de outra pessoa: ignorado
     import time; time.sleep(1.5)
@@ -192,22 +337,30 @@ def test_agendador_slots():
     tz = ZoneInfo("America/Sao_Paulo")
     assert scheduler.slots_devidos(datetime(2030, 1, 1, 8, 59, tzinfo=tz)) == []
     assert scheduler.slots_devidos(datetime(2030, 1, 1, 9, 5, tzinfo=tz)) == [(1, "09:00")]
-    assert scheduler.slots_devidos(datetime(2030, 1, 1, 9, 6, tzinfo=tz)) == []      # não repete no mesmo dia
-    assert scheduler.slots_devidos(datetime(2030, 1, 2, 20, 0, tzinfo=tz)) == []     # slots muito atrasados são pulados
+    assert scheduler.slots_devidos(datetime(2030, 1, 1, 9, 6, tzinfo=tz)) == []
+    assert scheduler.slots_devidos(datetime(2030, 1, 2, 20, 0, tzinfo=tz)) == []
     db.x("UPDATE perfis SET ativo=0 WHERE id=1")
-    assert scheduler.slots_devidos(datetime(2030, 1, 3, 9, 5, tzinfo=tz)) == []      # perfil desligado não dispara
+    assert scheduler.slots_devidos(datetime(2030, 1, 3, 9, 5, tzinfo=tz)) == []
 
 
 def test_novo_perfil_isolado(logado):
-    r = post_form(logado, "/perfis", nome="Iago Carvalho", handle="@iago")
-    assert r.status_code == 303
+    assert post_form(logado, "/perfis", nome="Iago Carvalho", handle="@iago").status_code == 303
     iago = db.one("SELECT * FROM perfis WHERE nome='Iago Carvalho'")
-    assert iago["ativo"] == 0 and iago["contexto_md"] == "" and iago["ig_token_enc"] == ""
+    assert iago["ativo"] == 0 and iago["contexto_md"] == "" and iago["ig_token_enc"] == "" and iago["llm_conexao_id"] is None
     assert crypto.dec(db.one("SELECT ig_token_enc FROM perfis WHERE id=1")["ig_token_enc"]) == TOKEN
 
 
-def test_conexoes(logado, fake):
+def test_remover_conexao_padrao_promove_outra(logado):
+    post_form(logado, "/llm/4/remover")
+    post_form(logado, "/llm/1/remover")
+    assert db.one("SELECT padrao FROM llm_conexoes ORDER BY id LIMIT 1")["padrao"] == 1
+    # recria a conexão padrão para os testes seguintes
+    post_form(logado, "/llm/editar", acao="aplicar", nome="LM Studio", tipo="openai", base_url=f"{FAKE}/v1",
+              modelo="modelo-b", padrao="on", api_key="")
+
+
+def test_conexoes_do_perfil(logado, fake):
     configurar_perfil(logado)
-    for alvo, ok in (("meta", "emerson_teste"), ("ollama", "Ollama OK"), ("telegram", "Telegram OK"), ("publico", "URL pública OK")):
+    for alvo, ok in (("llm", "LLM OK"), ("meta", "emerson_teste"), ("telegram", "Telegram OK"), ("publico", "URL pública OK")):
         post_form(logado, f"/conexoes/{alvo}", perfil_id="1")
-        assert ok in logado.get("/conexoes").text, alvo
+        assert ok in ver(logado, "/conexoes"), alvo

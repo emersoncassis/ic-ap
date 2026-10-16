@@ -2,7 +2,7 @@
 
 ## Status (v1 implementada)
 
-Implementado em `services/app`: login, fila (aprovar/refazer/descartar/editar legenda), perfis (token criptografado, contexto, horários, LLM), feeds globais e por perfil, conexões com teste de Meta/Ollama/Telegram/URL pública, histórico, agendador por horário, bot do Telegram. O n8n foi removido.
+Implementado em `services/app`: login, fila (aprovar/refazer/descartar/editar legenda), perfis (token criptografado, contexto, horários, LLM), feeds globais e por perfil, aba LLM (conexões nomeadas: detectar modelos, aplicar e testar), conexões com túnel Cloudflare, Telegram, fuso e senha editáveis, testes de Meta/LLM/Telegram/URL pública, histórico, agendador por horário, bot do Telegram. O n8n foi removido.
 Diferenças em relação ao texto abaixo: os horários (`horarios`, ex.: `09:00,18:00`) substituem `posts_por_dia`.
 Ainda **não** implementado: importar contexto a partir do site, métricas de alcance, Cloudflare Access para acesso externo, limpeza automática de cards antigos.
 
@@ -44,7 +44,7 @@ Estados do post: `capturado → extraido → gerado → aguardando_aprovacao →
 
 - Login com senha (hash forte) e sessão com CSRF.
 - Escuta só em `127.0.0.1`. Para acesso de fora, usar um **segundo** hostname protegido por Cloudflare Access, nunca o hostname de imagens.
-- Tokens criptografados no banco com chave em `.env`; a tela nunca mostra o token inteiro.
+- Tokens e chaves criptografados no banco com chave gerada no primeiro uso (`data/secret.key`, 0600); a tela nunca mostra o token inteiro.
 - Cada perfil só publica com o próprio token e o próprio `ig_user_id`.
 - Todo publish passa por aprovação (Telegram ou painel) na v1.
 

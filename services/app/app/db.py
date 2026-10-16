@@ -11,7 +11,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS perfis(
   id INTEGER PRIMARY KEY, nome TEXT NOT NULL, handle TEXT DEFAULT '', ativo INTEGER DEFAULT 1,
   ig_user_id TEXT DEFAULT '', ig_token_enc TEXT DEFAULT '', telegram_chat_id TEXT DEFAULT '',
-  llm_provider TEXT DEFAULT 'ollama', llm_model TEXT DEFAULT '', contexto_md TEXT DEFAULT '',
+  llm_conexao_id INTEGER, contexto_md TEXT DEFAULT '',
   horarios TEXT DEFAULT '09:00,18:00', palavras_chave TEXT DEFAULT '', max_idade_horas INTEGER DEFAULT 36,
   criado_em TEXT);
 CREATE TABLE IF NOT EXISTS feeds(
@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS posts(
 CREATE TABLE IF NOT EXISTS eventos(
   id INTEGER PRIMARY KEY, perfil_id INTEGER, post_id INTEGER, tipo TEXT, detalhe TEXT, criado_em TEXT);
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS llm_conexoes(
+  id INTEGER PRIMARY KEY, nome TEXT NOT NULL, tipo TEXT NOT NULL, base_url TEXT DEFAULT '', api_key_enc TEXT DEFAULT '',
+  modelo TEXT DEFAULT '', padrao INTEGER DEFAULT 0, criado_em TEXT);
 """
 
 

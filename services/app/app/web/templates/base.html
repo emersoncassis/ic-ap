@@ -37,7 +37,8 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 10px
     <a href="/" class="{{ 'on' if request.url.path=='/' }}">Fila</a>
     <a href="/perfis" class="{{ 'on' if request.url.path.startswith('/perfis') }}">Perfis</a>
     <a href="/feeds" class="{{ 'on' if request.url.path=='/feeds' }}">Feeds</a>
-    <a href="/conexoes" class="{{ 'on' if request.url.path=='/conexoes' }}">Conexões</a>
+    <a href="/llm" class="{{ 'on' if request.url.path=='/llm' }}">LLM</a>
+    <a href="/conexoes" class="{{ 'on' if request.url.path=='/conexoes' }}">Conexões e acesso</a>
     <a href="/historico" class="{{ 'on' if request.url.path=='/historico' }}">Histórico</a>
   </nav>
   <form method="post" action="/perfil-atual" class="sw">

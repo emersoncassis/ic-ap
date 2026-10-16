@@ -1,45 +1,16 @@
-# Esteira local ic-ap. Requer Docker Desktop (WSL2) com suporte a GPU NVIDIA.
+# Um único serviço. Toda a configuração (senha, LLM, túnel, Telegram, Meta) é feita no painel web.
+# O LLM roda fora daqui (LM Studio, Ollama, Jan, API...). Dentro do container, "localhost" não
+# é a sua máquina: use host.docker.internal no campo de endereço do LLM.
 services:
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    ports: ["127.0.0.1:11434:11434"]
-    volumes: [ollama_models:/root/.ollama]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - {driver: nvidia, count: all, capabilities: [gpu]}
-
   app:
     build: ./services/app
     restart: unless-stopped
-    env_file: .env
     environment:
       - TZ=America/Sao_Paulo
-    ports: ["127.0.0.1:8000:8000"]   # painel: só local. Acesso externo, só via Cloudflare Access (outro hostname)
-    depends_on: [ollama]
+    ports: ["127.0.0.1:8000:8000"]   # painel: só local
+    extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
-      - ./data:/data
+      - ./data:/data                          # banco, chave do app (secret.key) e cards: faça backup
       - ./templates:/srv/card-templates:ro
       - ./context:/context:ro
       - ./config:/config:ro
-
-  # Serve só a pasta de imagens temporárias. É isto que o túnel expõe.
-  public:
-    image: nginx:alpine
-    restart: unless-stopped
-    volumes:
-      - ./data/public:/usr/share/nginx/html:ro
-      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    depends_on: [public]
-
-volumes:
-  ollama_models:

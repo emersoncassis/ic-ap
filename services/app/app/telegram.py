@@ -3,11 +3,11 @@ import asyncio, json
 
 import httpx
 
-from . import config as C
+from . import config as C, settings
 
 
 def _url(metodo: str) -> str:
-    return f"{C.TELEGRAM_API}/bot{C.TELEGRAM_TOKEN}/{metodo}"
+    return f"{C.TELEGRAM_API}/bot{settings.telegram_token()}/{metodo}"
 
 
 async def _call(metodo: str, **kw):
@@ -20,7 +20,7 @@ async def _call(metodo: str, **kw):
 
 
 def ativo() -> bool:
-    return bool(C.TELEGRAM_TOKEN)
+    return bool(settings.telegram_token())
 
 
 async def enviar_card(chat_id: str, arquivo, post_id: int, legenda: str, aviso: str = "") -> str:

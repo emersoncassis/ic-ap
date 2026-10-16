@@ -1,7 +1,7 @@
 """Fluxo de um post: capturar -> extrair -> reagir -> renderizar -> aprovar -> publicar."""
 import json, re, shutil, sqlite3
 
-from . import config as C, crypto, db, feeds, ig, llm, render, telegram
+from . import config as C, crypto, db, feeds, ig, llm, render, settings, telegram
 
 RUNNING: set[int] = set()
 MAX_FALHAS = 3
@@ -9,6 +9,18 @@ MAX_FALHAS = 3
 
 def perfil(pid: int) -> dict | None:
     return db.one("SELECT * FROM perfis WHERE id=?", (pid,))
+
+
+def conexao_do_perfil(p: dict) -> dict | None:
+    """Conexão de LLM do perfil; sem escolha própria, usa a padrão. A chave volta descriptografada."""
+    con = db.one("SELECT * FROM llm_conexoes WHERE id=?", (p["llm_conexao_id"],)) if p.get("llm_conexao_id") else None
+    con = con or db.one("SELECT * FROM llm_conexoes WHERE padrao=1") or db.one("SELECT * FROM llm_conexoes ORDER BY id LIMIT 1")
+    if con:
+        try:
+            con = {**con, "api_key": crypto.dec(con["api_key_enc"])}
+        except Exception:
+            con = {**con, "api_key": ""}
+    return con
 
 
 def post(post_id: int) -> dict | None:
@@ -73,11 +85,14 @@ async def _processar(post_id: int, p: dict, temperature: float) -> bool:
             ex = await feeds.extrair(po["noticia_url"])
             _set(post_id, "extraido", texto=ex["texto"], noticia_titulo=po["noticia_titulo"] or ex["titulo"])
             po = post(post_id)
+        con = conexao_do_perfil(p)
+        if not con or not con["modelo"]:
+            raise ValueError("nenhuma conexão de LLM com modelo escolhido: configure em LLM")
         noticia = {"titulo": po["noticia_titulo"], "fonte": po["fonte"], "url": po["noticia_url"], "texto": po["texto"]}
         feedback, res, arquivo = None, None, None
         for tentativa in range(3):
             try:
-                res = await llm.reagir(p, noticia, temperature, feedback)
+                res = await llm.reagir(con, p["contexto_md"], noticia, temperature, feedback)
             except ValueError as e:
                 feedback = str(e)
                 continue
@@ -102,10 +117,11 @@ async def _processar(post_id: int, p: dict, temperature: float) -> bool:
                 db.log(p["id"], post_id, "telegram_falhou", str(e))
         return True
     except Exception as e:
-        _set(post_id, "falhou", erro=str(e)[:400])
-        db.log(p["id"], post_id, "falhou", str(e))
+        msg = (str(e) or type(e).__name__)[:400]
+        _set(post_id, "falhou", erro=msg)
+        db.log(p["id"], post_id, "falhou", msg)
         if telegram.ativo() and p["telegram_chat_id"]:
-            await telegram.avisar(p["telegram_chat_id"], f"Falha ao gerar post #{post_id}: {str(e)[:200]}")
+            await telegram.avisar(p["telegram_chat_id"], f"Falha ao gerar post #{post_id}: {msg[:200]}")
         return False
 
 
@@ -133,12 +149,13 @@ async def aprovar(post_id: int, origem: str = "painel") -> bool:
     p = perfil(po["perfil_id"])
     pub = C.PUBLIC / po["arquivo"]
     try:
-        if not C.BASE_URL:
-            raise ig.MetaError("PUBLIC_BASE_URL não configurada")
+        base = settings.base_url()
+        if not base:
+            raise ig.MetaError("URL pública não configurada (menu Conexões)")
         if not p["ig_user_id"] or not p["ig_token_enc"]:
             raise ig.MetaError("perfil sem ig_user_id ou token")
         shutil.copyfile(C.CARDS / po["arquivo"], pub)
-        media = await ig.publicar(p["ig_user_id"], crypto.dec(p["ig_token_enc"]), f"{C.BASE_URL}/{po['arquivo']}", po["legenda"])
+        media = await ig.publicar(p["ig_user_id"], crypto.dec(p["ig_token_enc"]), f"{base}/{po['arquivo']}", po["legenda"])
         _set(post_id, "publicado", media_id=media, erro=None)
         db.log(p["id"], post_id, "publicado", f"{origem} media={media}")
         resultado = "✅ Publicado."

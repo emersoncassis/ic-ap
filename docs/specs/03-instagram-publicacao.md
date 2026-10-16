@@ -14,7 +14,7 @@ Obtenção do token (script `scripts/meta_token.py`):
 1. No Graph API Explorer, gerar um token de usuário com as permissões acima (curto, ~1 h).
 2. `exchange`: troca por token de usuário longo (~60 dias).
 3. `pages`: com o token longo, lista suas Páginas e devolve o token da Página e o `IG_USER_ID` ligado. Um token de Página obtido de um token de usuário longo normalmente não expira. Conferir isso com `check` e, se expirar, refazer o passo 2 e 3.
-4. Colocar `IG_USER_ID` e `IG_ACCESS_TOKEN` no `.env`.
+4. Usar o assistente de token no cadastro do perfil (painel): informa app id, segredo e token curto; o app troca pelo longo, lista as Páginas com Instagram e grava o token da Página criptografado.
 
 Atenção: se a Página exigir Page Publishing Authorization, o publish falha até completar essa etapa no Facebook.
 

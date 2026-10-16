@@ -2,9 +2,9 @@
 {% block body %}
 <h1>Perfis</h1><p class="sub">Cada perfil tem conta, token, contexto, horários e Telegram próprios.</p>
 <div class="card"><table>
-  <tr><th>Nome</th><th>Handle</th><th>Estado</th><th>Horários</th><th>LLM</th><th></th></tr>
+  <tr><th>Nome</th><th>Handle</th><th>Estado</th><th>Horários</th><th></th></tr>
   {% for p in lista %}<tr><td>{{ p.nome }}</td><td>{{ p.handle }}</td>
-    <td>{{ 'ligado' if p.ativo else 'desligado' }}</td><td>{{ p.horarios }}</td><td>{{ p.llm_provider }}</td>
+    <td>{{ 'ligado' if p.ativo else 'desligado' }}</td><td>{{ p.horarios }}</td>
     <td><a href="/perfis/{{ p.id }}">editar</a></td></tr>{% endfor %}
 </table></div>
 <h2>Novo perfil</h2>

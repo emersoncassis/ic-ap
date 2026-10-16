@@ -20,12 +20,12 @@ RSS / link no Telegram
 
 ## Componentes
 
-| Serviço | Imagem/tecnologia | Porta | Função |
+| Parte | Tecnologia | Porta | Função |
 |---|---|---|---|
-| `ollama` | ollama/ollama, GPU NVIDIA | 11434 (local) | LLM local |
-| `app` | Python (FastAPI) + SQLite + Playwright | 8000 (local) | Painel web, agendador, pipeline, Telegram, publicação |
-| `public` | nginx | só via túnel | Serve apenas `data/public/` (JPEGs temporários) |
-| `cloudflared` | cloudflare/cloudflared | — | Túnel nomeado: hostname público → `http://public:80` |
+| `app` (único container) | Python (FastAPI) + SQLite + Playwright | 8000 (só local) | Painel web, agendador, pipeline, Telegram, publicação |
+| servidor de imagens | Starlette, dentro do app | 127.0.0.1:8081 | Serve apenas `data/public/` (JPEGs temporários) |
+| túnel | `cloudflared` iniciado pelo app com o token do painel | — | hostname público → `http://localhost:8081` |
+| LLM | **fora do app** (LM Studio, Ollama, Jan, API...) | — | Configurado na aba LLM |
 
 Tudo exceto o túnel fica em `127.0.0.1`. O que sai para a internet é só a pasta de JPEGs, com nome aleatório (uuid), apagada após o publish. O PC fica ligado, então o túnel nomeado fica sempre de pé.
 
@@ -38,7 +38,6 @@ ic-ap/
 ├── README.md
 ├── docs/specs/
 ├── docker-compose.yml
-├── .env.example              # tokens, IDs, nunca commitar .env
 ├── context/
 │   └── meu_contexto.md       # ver spec 04
 ├── templates/
@@ -50,11 +49,11 @@ ic-ap/
 
 ## Provedor de LLM (configurável)
 
-`LLM_PROVIDER=ollama|gemini|anthropic` no `.env`. A etapa de reação chama uma interface única (entrada: contexto + texto da notícia; saída: o JSON da spec 02). Padrão `ollama`. Cloud é reserva para quando o modelo local não segurar o tom ou o JSON. Só o texto da notícia e o contexto público vão para a nuvem.
+Conexão de LLM configurada no painel (tipo openai-compatível, ollama, gemini ou anthropic; modelos detectados automaticamente). A etapa de reação chama uma interface única (entrada: contexto + texto da notícia; saída: o JSON da spec 02). Padrão `ollama`. Cloud é reserva para quando o modelo local não segurar o tom ou o JSON. Só o texto da notícia e o contexto público vão para a nuvem.
 
 ## Segredos
 
-`.env` fora do git: `LLM_PROVIDER`, `GEMINI_API_KEY`/`ANTHROPIC_API_KEY` (só se usar nuvem), `IG_USER_ID`, `IG_ACCESS_TOKEN`, `META_APP_ID`, `META_APP_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, credenciais R2. Fornecer `.env.example` sem valores.
+Sem `.env`: tudo é configurado no painel e guardado criptografado no SQLite; a chave é gerada em `data/secret.key`.
 
 ## Não-objetivos da v1
 

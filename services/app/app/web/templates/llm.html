@@ -1,0 +1,60 @@
+{% extends "base.html" %}{% block title %}LLM · ic-ap{% endblock %}
+{% block body %}
+<h1>Modelo de linguagem</h1>
+<p class="sub">O modelo roda fora do app: em um programa seu (LM Studio, Ollama, Jan, llama.cpp…) ou numa API (Gemini, Claude). Aponte, detecte os modelos, escolha um e aplique.</p>
+
+<div class="card"><table>
+  <tr><th>Nome</th><th>Tipo</th><th>Endereço</th><th>Modelo</th><th></th></tr>
+  {% for c in lista %}<tr>
+    <td>{{ c.nome }} {% if c.padrao %}<span class="badge publicado">padrão</span>{% endif %}</td>
+    <td>{{ tipos[c.tipo] if c.tipo in tipos else c.tipo }}</td><td><small>{{ c.base_url or '—' }}</small></td><td>{{ c.modelo }}</td>
+    <td><div class="acts" style="margin:0">
+      <a class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line)" href="/llm?editar={{ c.id }}">Editar</a>
+      <form method="post" action="/llm/{{ c.id }}/testar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sec">Testar</button></form>
+      {% if not c.padrao %}<form method="post" action="/llm/{{ c.id }}/padrao"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sec">Tornar padrão</button></form>{% endif %}
+      <form method="post" action="/llm/{{ c.id }}/remover"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="bad" onclick="return confirm('Remover esta conexão?')">Remover</button></form>
+    </div></td></tr>
+  {% else %}<tr><td colspan="5" class="mut">Nenhuma conexão ainda. Crie a primeira abaixo.</td></tr>{% endfor %}
+</table></div>
+
+<h2>{{ 'Editar conexão' if f.id else 'Nova conexão' }}</h2>
+<form method="post" action="/llm/editar" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ f.id }}">
+  <div class="row">
+    <div><label>Nome</label><input name="nome" value="{{ f.nome }}" placeholder="Ex.: LM Studio no meu PC" required></div>
+    <div><label>Tipo</label>
+      <select name="tipo" id="tipo">{% for k, v in tipos.items() %}<option value="{{ k }}" {{ 'selected' if f.tipo==k }}>{{ v }}</option>{% endfor %}</select></div>
+  </div>
+  <div class="row">
+    <div id="box-url"><label>Endereço do servidor</label><input name="base_url" id="base_url" value="{{ f.base_url }}"></div>
+    <div><label>Chave de API <small>(deixe vazio se o servidor não pede{% if f.id %}; vazio mantém a atual{% endif %})</small></label><input type="password" name="api_key" autocomplete="off"></div>
+  </div>
+  <p class="mut" id="dica" style="font-size:13px;margin:8px 0 0"></p>
+  <label>Modelo</label>
+  {% if modelos %}
+    <select name="modelo">{% for m in modelos %}<option {{ 'selected' if m==f.modelo }}>{{ m }}</option>{% endfor %}</select>
+  {% else %}
+    <input name="modelo" value="{{ f.modelo }}" placeholder="Clique em “Detectar modelos” ou digite o nome do modelo">
+  {% endif %}
+  <label><input type="checkbox" name="padrao" {{ 'checked' if f.padrao }}> Usar como padrão dos perfis</label>
+  <div class="acts">
+    <button class="sec" type="submit" name="acao" value="detectar">Detectar modelos</button>
+    <button type="submit" name="acao" value="aplicar">Aplicar e testar</button>
+    {% if f.id %}<a class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line)" href="/llm">Nova conexão</a>{% endif %}
+  </div>
+</form>
+<script>
+const DICAS = {{ dicas|tojson }};
+const NOTAS = {
+  openai: "Qualquer programa com servidor compatível com OpenAI. LM Studio: porta 1234 (inicie o servidor local). Se este app roda no Docker e o programa roda no seu PC, use host.docker.internal em vez de localhost.",
+  ollama: "Ollama usa a porta 11434. Com o app no Docker, use host.docker.internal em vez de localhost.",
+  gemini: "Informe só a chave de API do Google AI Studio. Os modelos que geram texto serão listados.",
+  anthropic: "Informe só a chave de API da Anthropic."
+};
+const t = document.getElementById('tipo'), u = document.getElementById('base_url'), box = document.getElementById('box-url');
+function atualiza(){ const k = t.value; const precisaUrl = (k==='openai'||k==='ollama');
+  box.style.display = precisaUrl ? '' : 'none'; u.placeholder = DICAS[k] || '';
+  document.getElementById('dica').textContent = NOTAS[k] || ''; }
+t.addEventListener('change', atualiza); atualiza();
+</script>
+{% endblock %}

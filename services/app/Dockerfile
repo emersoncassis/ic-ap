@@ -1,4 +1,7 @@
 FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
+ARG TARGETARCH
+ADD https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${TARGETARCH} /usr/local/bin/cloudflared
+RUN chmod +x /usr/local/bin/cloudflared
 WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

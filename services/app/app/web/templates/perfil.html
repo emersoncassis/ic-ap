@@ -1,4 +1,23 @@
-{% extends "base.html" %}{% block title %}{{ p.nome }} · ic-ap{% endblock %}
+{% extends "base.html" %}{% block title %}{{ p.nome }} · ic-ap
+<h2>Assistente de token do Instagram</h2>
+<div class="card">
+  <p class="mut" style="margin-top:0">Preenche o IG_USER_ID e o token da Página sozinho. No Graph API Explorer, gere um token de usuário com <code>instagram_basic</code>, <code>instagram_content_publish</code> e <code>pages_read_engagement</code> e cole abaixo. O App Secret é usado só nesta troca e <b>não é guardado</b>.</p>
+  <form method="post" action="/perfis/{{ p.id }}/meta/buscar">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="row">
+      <div><label>App ID</label><input name="app_id" required></div>
+      <div><label>App Secret</label><input type="password" name="app_secret" autocomplete="off" required></div>
+      <div><label>Token de usuário (curto)</label><input type="password" name="token_curto" autocomplete="off" required></div>
+    </div>
+    <div class="acts"><button class="sec" type="submit">Buscar minhas Páginas</button></div>
+  </form>
+  {% if paginas %}
+  <table style="margin-top:14px"><tr><th>Página</th><th>Instagram</th><th></th></tr>
+    {% for pg in paginas %}<tr><td>{{ pg.nome }}</td><td>@{{ pg.ig_user }} <small>({{ pg.ig_id }})</small></td>
+      <td><form method="post" action="/perfis/{{ p.id }}/meta/usar" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="idx" value="{{ loop.index0 }}"><button type="submit">Usar neste perfil</button></form></td></tr>{% endfor %}
+  </table>{% endif %}
+</div>
+{% endblock %}
 {% block body %}
 <h1>{{ p.nome }}</h1><p class="sub">Edição do perfil #{{ p.id }}. O token nunca é exibido por inteiro.</p>
 <form method="post" action="/perfis/{{ p.id }}" class="grid">
@@ -23,11 +42,12 @@
     </div>
   </div>
   <div class="card"><h2 style="margin-top:0">Modelo de linguagem</h2>
-    <div class="row">
-      <div><label>Provedor</label><select name="llm_provider">{% for o in ['ollama','gemini','anthropic'] %}<option {{ 'selected' if p.llm_provider==o }}>{{ o }}</option>{% endfor %}</select></div>
-      <div><label>Modelo (vazio = padrão do .env no Ollama)</label><input name="llm_model" value="{{ p.llm_model }}"></div>
-    </div>
-    <small>Gemini e Anthropic usam as chaves do .env (GEMINI_API_KEY, ANTHROPIC_API_KEY); para eles, informe o modelo.</small>
+    <label>Conexão de LLM</label>
+    <select name="llm_conexao_id">
+      <option value="">Padrão{% for c in conexoes if c.padrao %} ({{ c.nome }} · {{ c.modelo }}){% endfor %}</option>
+      {% for c in conexoes %}<option value="{{ c.id }}" {{ 'selected' if p.llm_conexao_id==c.id }}>{{ c.nome }} · {{ c.modelo }}</option>{% endfor %}
+    </select>
+    <small>As conexões são criadas no menu <a href="/llm">LLM</a>.</small>
   </div>
   <div class="card"><h2 style="margin-top:0">Contexto pessoal</h2>
     <small>Quem é, tom de voz, crenças, bordões, frases proibidas e exemplos reais. É o que faz o post soar como a pessoa.</small>
@@ -35,4 +55,23 @@
   </div>
   <div class="acts"><button type="submit">Salvar</button><a class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line)" href="/perfis">Voltar</a></div>
 </form>
+
+<h2>Assistente de token do Instagram</h2>
+<div class="card">
+  <p class="mut" style="margin-top:0">Preenche o IG_USER_ID e o token da Página sozinho. No Graph API Explorer, gere um token de usuário com <code>instagram_basic</code>, <code>instagram_content_publish</code> e <code>pages_read_engagement</code> e cole abaixo. O App Secret é usado só nesta troca e <b>não é guardado</b>.</p>
+  <form method="post" action="/perfis/{{ p.id }}/meta/buscar">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="row">
+      <div><label>App ID</label><input name="app_id" required></div>
+      <div><label>App Secret</label><input type="password" name="app_secret" autocomplete="off" required></div>
+      <div><label>Token de usuário (curto)</label><input type="password" name="token_curto" autocomplete="off" required></div>
+    </div>
+    <div class="acts"><button class="sec" type="submit">Buscar minhas Páginas</button></div>
+  </form>
+  {% if paginas %}
+  <table style="margin-top:14px"><tr><th>Página</th><th>Instagram</th><th></th></tr>
+    {% for pg in paginas %}<tr><td>{{ pg.nome }}</td><td>@{{ pg.ig_user }} <small>({{ pg.ig_id }})</small></td>
+      <td><form method="post" action="/perfis/{{ p.id }}/meta/usar" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="idx" value="{{ loop.index0 }}"><button type="submit">Usar neste perfil</button></form></td></tr>{% endfor %}
+  </table>{% endif %}
+</div>
 {% endblock %}
