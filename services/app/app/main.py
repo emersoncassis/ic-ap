@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import banco, config as C, crypto, db, ig, llm, marca as marca_mod, midia, pipeline, publico, render, scheduler, seed, settings, supervisor, telegram
+from . import banco, config as C, crypto, db, ig, llm, marca as marca_mod, midia, pipeline, publico, render, scheduler, seed, settings, supervisor, telegram, voz
 from .tunnel import tunel
 
 WEB = Path(__file__).parent / "web"
@@ -622,7 +622,9 @@ def conexoes_page(request: Request):
     return render_page(request, "conexoes.html", perfil=pipeline.perfil(pid) if pid else None,
                        base=settings.base_url(), tunel=tunel, tem_tunel=bool(settings.tunnel_token()),
                        tg_token=crypto.mask(settings.telegram_token()), tz=settings.tz(),
-                       hg_key=crypto.mask(banco.higgs_chave().split(':')[-1]), un_key=crypto.mask(settings.unsplash_key()))
+                       hg_key=crypto.mask(banco.higgs_chave().split(':')[-1]),
+                       wh={"url": db.get_setting("whisper_url"), "modelo": db.get_setting("whisper_model"), "chave": crypto.mask(settings.segredo("whisper_key"))},
+                       tt={"url": db.get_setting("tts_url"), "modelo": db.get_setting("tts_model"), "voz": db.get_setting("tts_voz"), "chave": crypto.mask(settings.segredo("tts_key"))}, un_key=crypto.mask(settings.unsplash_key()))
 
 
 @app.post("/config/{secao}")
@@ -663,6 +665,26 @@ async def config_salvar(request: Request, secao: str):
             flash(request, "Chave do Higgsfield salva. Use “Testar” abaixo (gera uma imagem de verdade e gasta créditos).")
         else:
             flash(request, "Preencha o ID e o segredo da chave.", "aviso")
+    elif secao in ("whisper", "tts"):
+        if f.get("acao") == "remover":
+            for k in ("url", "model"):
+                db.set_setting(f"{secao}_{k}", "")
+            settings.guardar_segredo(f"{secao}_key", "")
+            if secao == "tts":
+                db.set_setting("tts_voz", "")
+            flash(request, "Configuração removida.")
+        else:
+            url = f.get("endereco", "").strip().rstrip("/")
+            if not url.startswith(("http://", "https://")):
+                flash(request, "O endereço precisa começar com http:// ou https:// (ex.: http://host.docker.internal:8000).", "erro")
+            else:
+                db.set_setting(f"{secao}_url", url)
+                db.set_setting(f"{secao}_model", f.get("modelo", "").strip())
+                if secao == "tts":
+                    db.set_setting("tts_voz", f.get("voz", "").strip())
+                if f.get("chave", "").strip():
+                    settings.guardar_segredo(f"{secao}_key", f["chave"].strip())
+                flash(request, "Salvo. Use “Testar” abaixo.")
     elif secao == "unsplash":
         if f.get("acao") == "remover":
             settings.guardar_segredo("unsplash_key", "")
@@ -713,6 +735,22 @@ async def conexao_testar(request: Request, alvo: str):
                 raise RuntimeError("falta o token do bot (acima) ou o chat_id do perfil")
             await telegram._call("sendMessage", data={"chat_id": p["telegram_chat_id"], "text": f"Teste do ic-ap: perfil {p['nome']}."})
             flash(request, "Telegram OK: mensagem de teste enviada.")
+        elif alvo == "tts":
+            audio = await voz.narrar("Teste de voz do ic-ap.")
+            try:
+                dur = (await midia.sondar(audio))["duracao"]
+            finally:
+                audio.unlink(missing_ok=True)
+            flash(request, f"Voz OK: áudio de {dur:.1f} s gerado.")
+        elif alvo == "whisper":
+            amostra = C.DATA / "tmp" / f"teste_{secrets.token_hex(6)}.wav"
+            amostra.parent.mkdir(parents=True, exist_ok=True)
+            await midia._run("ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=1", str(amostra))
+            try:
+                await voz.transcrever(amostra)
+            finally:
+                amostra.unlink(missing_ok=True)
+            flash(request, "Transcrição OK: o servidor respondeu ao áudio de teste (um tom, sem fala, então não volta texto).")
         elif alvo == "banco":
             tmp = C.DATA / "tmp" / f"teste_{secrets.token_hex(6)}.jpg"
             try:

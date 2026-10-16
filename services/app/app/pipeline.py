@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import banco, config as C, crypto, db, feeds, ig, llm, marca as marca_mod, midia, render, settings, telegram
+from . import banco, config as C, crypto, db, feeds, ig, llm, marca as marca_mod, midia, render, settings, telegram, voz
 
 RUNNING: set[int] = set()
 MAX_FALHAS = 3
@@ -353,6 +353,7 @@ AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
          "• Ideias de posts: /ideias, ou peça um tema\n"
          "• Gerar: “faz um carrossel de 6 slides sobre X”, “um story sobre Y”, “2 versões para testar”\n"
          "• Foto ou vídeo: escreva o pedido na legenda. Ex.: “story animado com música e um texto sério, tom de CEO”, “reel sem música”, “feed: treino de hoje”\n"
+         "• Vídeo: “corta os silêncios”, “legenda animada” (precisa de Transcrição em Conexões). Foto: “narra: …” ou só “com narração” (precisa de Voz em Conexões)\n"
          "• Marca: “meu fundo é azul escuro #0b1f3a e o destaque é amarelo”; logotipo: envie o arquivo com a legenda “logo”\n"
          "• Citação: “faz uma citação sobre X” (com “foto de fundo” usa banco de imagens); meme: “meme sobre X”, ou envie sua foto com a legenda “meme: …”\n"
          "• Botão 📐 em cada card copia o post para Story/Feed sem cortar a imagem\n"
@@ -391,53 +392,128 @@ def _destino(tipo: str, texto: str) -> tuple[str, str, bool]:
 
 
 def _pedidos(texto: str) -> dict:
-    """O que o autor pediu em linguagem livre na legenda da mídia: animação, música e texto na tela."""
+    """O que o autor pediu em linguagem livre na legenda da mídia: animação, música, texto na tela, corte de silêncio, legendas animadas, narração."""
     t = re.sub(r"(?i)\bsem\s+m[uú]sica\b", "", texto or "")
-    return {"animar": bool(re.search(r"(?i)\banim\w*|\bmovimento\b|\bzoom\b", t)),
-            "musica": bool(re.search(r"(?i)\bm[uú]sica\b|\btrilha\b", t)),
-            "texto": bool(re.search(r"(?i)\b(legenda|texto|frase|escrev\w+)\b", t))}
+    legendar = bool(re.search(r"(?i)\blegendas?\s+animad\w+|\blegendar\b|\bkaraok\w+", t))
+    t2 = re.sub(r"(?i)\blegendas?\s+animad\w+|\blegendar\b|\bkaraok\w+", "", t)
+    return {"animar": bool(re.search(r"(?i)\banim\w*|\bmovimento\b|\bzoom\b", t2)),
+            "musica": bool(re.search(r"(?i)\bm[uú]sica\b|\btrilha\b", t2)),
+            "texto": bool(re.search(r"(?i)\b(legenda|texto|frase|escrev\w+)\b", t2)),
+            "cortar": bool(re.search(r"(?i)\b(sil[eê]ncios?|pausas?)\b", t2)),
+            "legendar": legendar,
+            "narrar": bool(re.search(r"(?i)\b(narr\w+|locu[cç]\w+|voz\s+em\s+off)\b", t2))}
+
+
+def _roteiro_literal(texto: str) -> str:
+    """Texto que o autor mandou falar: entre aspas, ou depois de 'narra:'. Vazio se ele só pediu narração."""
+    m = re.search(r"[\"“”«]([^\"“”»]{20,})[\"“”»]", texto or "") or re.search(r"(?is)\bnarr\w*\s*:\s*(.{20,})$", texto or "")
+    return m.group(1).strip() if m else ""
 
 
 async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
-    """Cria um post a partir de foto/vídeo seu. Entende pedidos em texto livre: story/reel/feed, animação, música, texto na tela
-    e tom ("sério, tom de CEO"). Ajusta o formato, mistura a trilha, escreve a legenda e envia para aprovação."""
+    """Cria um post a partir de foto/vídeo seu. Entende pedidos em texto livre: story/reel/feed, animação, música, texto na tela, tom,
+    corte de silêncio, legendas animadas (Whisper) e narração (voz local). Ajusta o formato, escreve a legenda e envia para aprovação."""
     formato, descricao, sem_musica = _destino(tipo, texto)
     ped = _pedidos(texto)
     con = conexao_do_perfil(p)
     avisos: list[str] = []
+    extras: list[str] = []
+    tmp: list = []  # arquivos temporários a apagar no fim
+    palavras: list[dict] = []
     animado = tipo == "foto" and formato == "story" and (ped["animar"] or ped["musica"])
     quer_musica = not sem_musica and ((tipo == "video" and (p["musica_modo"] == "aleatoria" or ped["musica"]))
-                                      or (animado and (ped["musica"] or p["musica_modo"] == "aleatoria")))
+                                      or (tipo == "foto" and (animado or ped["narrar"]) and (ped["musica"] or p["musica_modo"] == "aleatoria")))
     musica = None
     if quer_musica:
         musica = midia.escolher_musica()
         if not musica:
             avisos.append("ℹ️ Pediu música, mas não há músicas cadastradas (menu Músicas do painel).")
-    texto_tela, overlay = "", None
     mencoes = list(dict.fromkeys(m.rstrip(".") for m in re.findall(r"@[A-Za-z0-9_.]{2,30}", texto or "")))
-    if formato == "story" and ped["texto"]:
-        if not con or not con["modelo"]:
-            avisos.append("⚠️ Nenhum LLM configurado: Story sem texto na tela.")
-        else:
-            try:
-                texto_tela = await llm.texto_story(con, p["contexto_md"], descricao or texto)
-            except Exception as e:
-                db.log(p["id"], None, "texto_story_falhou", str(e))
-                avisos.append(f"⚠️ Não consegui escrever o texto da tela: {str(e)[:120]}")
-    if formato == "story" and (texto_tela or mencoes):
-        overlay = await render.overlay_story(texto_tela, "", p, mencoes)
+    texto_tela, overlay, audio_fala, dur_fala = "", None, None, 7.0
     try:
+        # --- narração (foto): roteiro -> voz -> áudio final; a foto vira vídeo vertical ---
+        if ped["narrar"]:
+            if tipo == "video":
+                avisos.append("ℹ️ Narração por cima de vídeo ainda não é suportada; vale só para foto.")
+            elif not voz.tts_ok():
+                avisos.append("ℹ️ Pediu narração, mas a voz não está configurada (Conexões → Voz).")
+            elif not con or not con["modelo"]:
+                avisos.append("⚠️ Nenhum LLM configurado: sem narração.")
+            else:
+                try:
+                    roteiro = _roteiro_literal(texto) or await llm.roteiro_narracao(con, p["contexto_md"], descricao or texto)
+                    fala = await voz.narrar(roteiro)
+                    tmp.append(fala)
+                    audio_fala, dur_fala = await midia.misturar_voz(fala, musica)
+                    tmp.append(audio_fala)
+                    if dur_fala > midia.MAX_STORY_S:
+                        raise voz.VozError("a narração passa de 60 s; peça um texto mais curto")
+                    texto_tela = ""
+                    palavras = (await voz.transcrever(fala)) if voz.whisper_ok() else voz.estimar(roteiro, dur_fala - 1.0)
+                    animado = True
+                    formato = "story" if formato == "story" else "reel"
+                    extras.append("narrado")
+                except Exception as e:
+                    audio_fala = None
+                    db.log(p["id"], None, "narracao_falhou", str(e))
+                    avisos.append(f"⚠️ Não consegui narrar: {str(e)[:150]}")
+        # --- vídeo: corte de silêncio e transcrição (antes do ajuste de formato) ---
+        fonte = src
+        if tipo == "video" and ped["cortar"]:
+            try:
+                fonte, removido = await midia.cortar_silencio(src)
+                if removido:
+                    tmp.append(fonte)
+                    extras.append(f"silêncio cortado (−{removido:.1f} s)")
+                else:
+                    avisos.append("ℹ️ Não encontrei pausas longas para cortar.")
+            except midia.MidiaError as e:
+                fonte = src
+                avisos.append(f"⚠️ Não consegui cortar o silêncio: {str(e)[:150]}")
+        if tipo == "video" and ped["legendar"]:
+            if not voz.whisper_ok():
+                avisos.append("ℹ️ Pediu legendas animadas, mas a transcrição não está configurada (Conexões → Transcrição).")
+            else:
+                try:
+                    palavras = await voz.transcrever(fonte)
+                    if not palavras:
+                        avisos.append("ℹ️ Não ouvi fala no vídeo: sem legendas animadas.")
+                except voz.VozError as e:
+                    avisos.append(f"⚠️ Legendas animadas falharam: {str(e)[:150]}")
+        if tipo == "foto" and ped["legendar"] and not audio_fala:
+            avisos.append("ℹ️ Legendas animadas precisam de fala: use em vídeo com voz ou junto com “narração”.")
+        # --- texto na tela (Story) e menções ---
+        if formato == "story" and ped["texto"] and not audio_fala:
+            if not con or not con["modelo"]:
+                avisos.append("⚠️ Nenhum LLM configurado: Story sem texto na tela.")
+            else:
+                try:
+                    texto_tela = await llm.texto_story(con, p["contexto_md"], descricao or texto)
+                except Exception as e:
+                    db.log(p["id"], None, "texto_story_falhou", str(e))
+                    avisos.append(f"⚠️ Não consegui escrever o texto da tela: {str(e)[:120]}")
+        if formato == "story" and (texto_tela or mencoes):
+            overlay = await render.overlay_story(texto_tela, "", p, mencoes)
+        # --- montagem ---
         if tipo == "video":
-            arquivo = await midia.video(src, formato, musica, overlay)
+            arquivo = await midia.video(fonte, formato, musica, overlay)
         elif animado:
-            arquivo = await midia.story_animado(src, musica, overlay)
+            arquivo = await midia.story_animado(src, audio_fala or musica, overlay, dur_fala if audio_fala else 7.0)
         else:
             arquivo = await midia.foto(src, formato)
             if overlay:
                 arquivo = await midia.sobrepor(arquivo, overlay)
+        if palavras and ped["legendar"] and arquivo.endswith(".mp4"):
+            try:
+                com_legenda = await midia.legendar(arquivo, palavras, marca_mod.carregar(p)["acento"])
+                _apagar(arquivo)
+                arquivo = com_legenda
+                extras.append("legendas animadas")
+            except midia.MidiaError as e:
+                avisos.append(f"⚠️ Não consegui gravar as legendas: {str(e)[:150]}")
     finally:
-        if overlay:
-            Path(overlay).unlink(missing_ok=True)
+        for t in tmp + ([overlay] if overlay else []):
+            Path(t).unlink(missing_ok=True)
     if formato == "story" and mencoes:
         avisos.append("ℹ️ Menção: vai escrita na imagem e também como menção real pela API (a pessoa é notificada). Não dá para criar adesivos de link/enquete pela API.")
     legenda = ""
@@ -447,7 +523,7 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
         elif not con or not con["modelo"]:
             avisos.append("⚠️ Nenhum LLM configurado: legenda em branco.")
         else:
-            legenda = await llm.legenda_midia(con, p["contexto_md"], descricao, "vídeo" if tipo == "video" else "foto")
+            legenda = await llm.legenda_midia(con, p["contexto_md"], descricao, "vídeo" if arquivo.endswith(".mp4") else "foto")
             falta = [m for m in mencoes if m.lower() not in legenda.lower()]
             if falta:
                 legenda += "\n\n" + " ".join(falta)
@@ -456,10 +532,10 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
                (p["id"], "aguardando_aprovacao", (descricao or "Mídia do Telegram")[:120], "Telegram", descricao, texto_tela, legenda,
                 arquivo, formato, ",".join(mencoes), db.now(), db.now()))
     db.log(p["id"], pid, "midia_recebida", f"{tipo} -> {formato}" + (" animado" if animado else "") +
-           (f" musica={musica.name}" if musica else "") + (" texto" if texto_tela else ""))
+           (f" musica={musica.name}" if musica else "") + (" texto" if texto_tela else "") + (" " + ",".join(extras) if extras else ""))
     if p["telegram_chat_id"]:
-        resumo = formato.upper() + (" · animado" if animado else "") + (f" · trilha: {musica.stem}" if musica else "") + \
-            (f" · texto na tela: “{texto_tela}”" if texto_tela else "")
+        resumo = formato.upper() + (" · animado" if animado and "narrado" not in extras else "") + (f" · trilha: {musica.stem}" if musica else "") + \
+            (f" · texto na tela: “{texto_tela}”" if texto_tela else "") + "".join(f" · {x}" for x in extras)
         mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / arquivo, pid,
                                          (legenda or "(sem legenda)") + f"\n\n[{resumo}]", "\n".join(avisos))
         db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))

@@ -817,10 +817,14 @@ def test_video_story_ganha_texto_na_tela(logado, fake):
 
 def test_pedidos_em_texto_livre():
     f = pipeline._pedidos
-    assert f("quero um story, gere uma legenda uma animação com musica serio tom de CEO") == {"animar": True, "musica": True, "texto": True}
-    assert f("story sem música") == {"animar": False, "musica": False, "texto": False}
-    assert f("feed: treino de hoje") == {"animar": False, "musica": False, "texto": False}
+    base = {"animar": False, "musica": False, "texto": False, "cortar": False, "legendar": False, "narrar": False}
+    assert f("quero um story, gere uma legenda uma animação com musica serio tom de CEO") == {**base, "animar": True, "musica": True, "texto": True}
+    assert f("story sem música") == base
+    assert f("feed: treino de hoje") == base
     assert f("story com trilha e zoom")["animar"] and f("story com trilha e zoom")["musica"]
+    assert f("reel: corta os silêncios e as pausas") == {**base, "cortar": True}
+    assert f("story com legenda animada") == {**base, "legendar": True}, "“legenda animada” não é texto na tela nem animação da foto"
+    assert f("story com narração sobre foco")["narrar"] and f("voz em off")["narrar"] and f("com locução")["narrar"]
 
 
 # ---------------- Lote 2: marca, citação, meme, banco de imagens, adaptação ----------------
@@ -1094,4 +1098,154 @@ def test_mencao_no_story_aparece_na_imagem_e_no_feed_vai_na_legenda(logado, fake
     fake.push_msg(42, "foto", "feed: treino com @iagocarvalho")
     p = _novo_post(n)
     assert "@iagocarvalho" in p["legenda"]
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+# ---------------- Lote 3: vídeo local (silêncio, legendas animadas, narração) ----------------
+def _voz_cfg(client, whisper=True, tts=True):
+    if whisper:
+        post_form(client, "/config/whisper", endereco=FAKE, modelo="small", chave="WKEY")
+    else:
+        post_form(client, "/config/whisper", acao="remover")
+    if tts:
+        post_form(client, "/config/tts", endereco=FAKE + "/v1", modelo="kokoro", voz="pm_alex", chave="")
+    else:
+        post_form(client, "/config/tts", acao="remover")
+
+
+def _amarelo_no_quadro(video, t, regiao="1000:260:40:1250", tol=45):
+    import subprocess
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(t), "-i", str(video), "-frames:v", "1", "-vf", f"crop={regiao},format=rgb24",
+                          "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
+    return sum(1 for i in range(0, len(raw) - 2, 3) if _perto((raw[i], raw[i + 1], raw[i + 2]), (255, 209, 102), tol))
+
+
+def _diff_regiao(a, b, t, regiao="1000:260:40:1250"):
+    import subprocess
+    def raw(v):
+        return subprocess.run(["ffmpeg", "-v", "error", "-ss", str(t), "-i", str(v), "-frames:v", "1", "-vf", f"crop={regiao},format=rgb24", "-f", "rawvideo", "-"],
+                              capture_output=True, check=True).stdout
+    x, y = raw(a), raw(b)
+    return sum(abs(i - j) for i, j in zip(x, y))
+
+
+def test_conexoes_whisper_e_voz_testam_e_guardam_chave_mascarada(logado, fake):
+    _voz_cfg(logado)
+    pg = ver(logado, "/conexoes")
+    assert "WKEY" not in pg and "Transcrição (Whisper)" in pg and "Voz (TTS)" in pg
+    post_form(logado, "/config/tts", endereco="localhost:8880", modelo="", voz="")
+    assert "http://" in ver(logado, "/conexoes") and db.get_setting("tts_url") == FAKE + "/v1", "endereço sem http é recusado e o anterior fica"
+    post_form(logado, "/conexoes/whisper", perfil_id="1")
+    pg = ver(logado, "/conexoes")
+    assert "Transcrição OK" in pg, re.findall(r'class="flash[^>]*>([^<]*)', pg)
+    post_form(logado, "/conexoes/tts", perfil_id="1")
+    assert "Voz OK" in ver(logado, "/conexoes")
+    v = fake.st()["voz"]
+    w = next(x for x in v if x[0] == "whisper")
+    assert w[1] == "Bearer WKEY" and w[2]["model"] == "small" and set(w[2]["gran"]) == {"word", "segment"} and w[2]["lang"] == "pt" and w[2]["bytes"] > 100
+    t = next(x for x in v if x[0] == "tts")
+    assert t[2]["voice"] == "pm_alex" and t[2]["model"] == "kokoro" and t[2]["response_format"] == "mp3", "o sufixo /v1 do endereço não duplica"
+
+
+def test_video_corta_silencio_e_mantem_audio(logado, fake):
+    n = _n_midia()
+    fake.push_msg(42, "video", "reel: corta os silêncios do treino de hoje", arquivo="silencio.mp4")
+    p = _novo_post(n)
+    info = _probe(C.CARDS / p["arquivo"])
+    assert p["formato"] == "reel" and info["audio"] and (info["w"], info["h"]) == (1080, 1920)
+    assert 1.6 < info["dur"] < 3.2, f"4 s com 2 s de pausa devem encolher (ficou {info['dur']:.1f})"
+    esperar(lambda: any(m == "sendVideo" and "silêncio cortado" in d["caption"] for m, d in fake.st()["tg"]))
+    assert not fake.st()["voz"], "cortar silêncio é só ffmpeg: não usa Whisper"
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    # vídeo sem pausas: avisa e segue
+    n = _n_midia()
+    fake.push_msg(42, "video", "reel sem pausas", arquivo="video.mp4")
+    p = _novo_post(n)
+    esperar(lambda: any(m == "sendVideo" and "Não encontrei pausas" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_video_com_legenda_animada_grava_palavras_destacadas(logado, fake):
+    _voz_cfg(logado)
+    n = _n_midia()
+    fake.push_msg(42, "video", "story legenda animada", arquivo="video.mp4")
+    p = _novo_post(n)
+    assert p["formato"] == "story" and p["reacao"] == "" and not any("texto curto" in u for u in fake.st()["llm_users"]), "“legenda animada” não vira texto na tela"
+    assert (_probe(C.CARDS / p["arquivo"])["w"], _probe(C.CARDS / p["arquivo"])["h"]) == (1080, 1920)
+    esperar(lambda: any(m == "sendVideo" and "legendas animadas" in d["caption"] for m, d in fake.st()["tg"]))
+    # mesmo vídeo sem o pedido de legenda: a diferença na faixa da legenda só existe enquanto alguém fala
+    n = _n_midia()
+    fake.push_msg(42, "video", "story", arquivo="video.mp4")
+    base = _novo_post(n)
+    falando = _diff_regiao(C.CARDS / p["arquivo"], C.CARDS / base["arquivo"], 0.8)
+    calado = _diff_regiao(C.CARDS / p["arquivo"], C.CARDS / base["arquivo"], 2.8)
+    assert falando > 100000 and falando > 5 * calado, f"legenda desenhada só durante a fala: {falando} vs {calado}"
+    post_form(logado, f"/posts/{base['id']}/descartar")
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    # servidor que só devolve segmentos: as palavras são distribuídas no tempo do segmento
+    fake.set(whisper_modo="segmentos")
+    n = _n_midia()
+    fake.push_msg(42, "video", "story legenda animada", arquivo="video.mp4")
+    p = _novo_post(n)
+    esperar(lambda: any(m == "sendVideo" and "legendas animadas" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    # sem transcrição configurada: avisa e entrega o vídeo sem legenda
+    _voz_cfg(logado, whisper=False)
+    n = _n_midia()
+    fake.push_msg(42, "video", "story legenda animada", arquivo="video.mp4")
+    p = _novo_post(n)
+    esperar(lambda: any(m == "sendVideo" and "transcrição não está configurada" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    _voz_cfg(logado)
+
+
+def test_foto_com_narracao_vira_story_com_voz_e_legendas(logado, fake):
+    _voz_cfg(logado, whisper=False)
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story com narração sobre disciplina e legenda animada")
+    p = _novo_post(n)
+    info = _probe(C.CARDS / p["arquivo"])
+    assert p["formato"] == "story" and info["audio"] and (info["w"], info["h"]) == (1080, 1920) and 2.5 < info["dur"] < 3.8, "voz de 2 s + 1 s de respiro"
+    assert any(x[0] == "tts" and "disciplina" in x[2]["input"] for x in fake.st()["voz"]), "o roteiro escrito pelo LLM foi para a voz"
+    assert not any(x[0] == "whisper" for x in fake.st()["voz"]), "sem Whisper, o tempo das palavras é estimado"
+    esperar(lambda: any(m == "sendVideo" and "narrado" in d["caption"] and "legendas animadas" in d["caption"] for m, d in fake.st()["tg"]))
+    assert _amarelo_no_quadro(C.CARDS / p["arquivo"], 0.5) > 150
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    # texto literal entre aspas vai direto para a voz, sem roteiro do LLM; foto em feed + narração vira reel
+    fake.set()
+    n = _n_midia()
+    antes = len(fake.st()["llm_users"])
+    fake.push_msg(42, "foto", 'com narração: "Disciplina é o que sustenta o resultado quando a motivação acaba" #treino')
+    p = _novo_post(n)
+    assert p["formato"] == "reel" and p["arquivo"].endswith(".mp4") and p["legenda"], "reel precisa de legenda"
+    t = [x for x in fake.st()["voz"] if x[0] == "tts"][-1]
+    assert t[2]["input"] == "Disciplina é o que sustenta o resultado quando a motivação acaba"
+    assert not any("roteiro" in u for u in fake.st()["llm_users"][antes:])
+    post_form(logado, f"/posts/{p['id']}/aprovar")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
+    media = next(d for t_, d in fake.st()["graph"] if t_ == "media")
+    assert media["media_type"] == "REELS" and media["video_url"].endswith(".mp4")
+
+
+def test_narracao_sem_voz_ou_com_voz_fora_do_ar_avisa_e_entrega_o_post(logado, fake):
+    _voz_cfg(logado, tts=False)
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story com narração sobre foco")
+    p = _novo_post(n)
+    assert p["arquivo"].endswith(".jpg") and p["estado"] == "aguardando_aprovacao"
+    esperar(lambda: any(m == "sendPhoto" and "voz não está configurada" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    _voz_cfg(logado)
+    fake.set(voz_modo="erro")
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story com narração sobre foco")
+    p = _novo_post(n)
+    assert p["arquivo"].endswith(".jpg")
+    esperar(lambda: any(m == "sendPhoto" and "Não consegui narrar" in d["caption"] and "HTTP 500" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    # narração em vídeo ainda não existe: avisa
+    n = _n_midia()
+    fake.push_msg(42, "video", "reel com narração", arquivo="video.mp4")
+    p = _novo_post(n)
+    esperar(lambda: any(m == "sendVideo" and "vale só para foto" in d["caption"] for m, d in fake.st()["tg"]))
     post_form(logado, f"/posts/{p['id']}/descartar")

@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 def make(port: int) -> FastAPI:
     app = FastAPI()
-    st = {"agente": [], "carrossel_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False, "banco": []}
+    st = {"agente": [], "carrossel_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False, "banco": [], "voz": [], "whisper_modo": "ok", "voz_modo": "ok"}
     app.state.st = st
 
     @app.get("/_st")
@@ -20,7 +20,7 @@ def make(port: int) -> FastAPI:
 
     @app.post("/_reset")
     def _reset(request: Request):
-        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok")
+        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok", voz=[], whisper_modo="ok", voz_modo="ok")
         return {}
 
     @app.post("/_set")
@@ -101,6 +101,8 @@ def make(port: int) -> FastAPI:
         if "cria um meme" in system:
             return json.dumps({"topo": "Quando o relatório fecha", "base": "mas o dado era de outro cliente",
                                "legenda": "Todo mundo já passou por isso. #ia #dados #humor #empresas #gestao", "busca": "surprised office"}, ensure_ascii=False)
+        if "roteiro de narração" in system:
+            return json.dumps({"texto": "Hoje eu parei para pensar em disciplina, porque ela sustenta o resultado quando a motivação acaba."}, ensure_ascii=False)
         if "texto curto que aparece NA TELA" in system:
             return json.dumps({"texto": "Disciplina sustenta o resultado. Sempre."}, ensure_ascii=False)
         if "sugere hashtags" in system:
@@ -230,6 +232,25 @@ def make(port: int) -> FastAPI:
     @app.get("/graph/{ig}/content_publishing_limit")
     def g_limit(ig: str):
         return {"data": [{"quota_usage": 1}]}
+
+    # --- Whisper e TTS (API compatível com a da OpenAI) ---
+    @app.post("/v1/audio/transcriptions")
+    async def whisper(request: Request):
+        form = await request.form()
+        st["voz"].append(["whisper", request.headers.get("authorization", ""), {"model": form.get("model"), "gran": form.getlist("timestamp_granularities[]"),
+                                                                                 "lang": form.get("language"), "bytes": len(await form["file"].read())}])
+        if st["whisper_modo"] == "segmentos":
+            return {"text": "Disciplina sustenta o resultado", "segments": [{"text": " Disciplina sustenta o resultado", "start": 0.1, "end": 2.0}]}
+        return {"text": "Disciplina sustenta o resultado", "words": [{"word": "Disciplina", "start": 0.1, "end": 0.6}, {"word": "sustenta", "start": 0.7, "end": 1.2},
+                                                                    {"word": "o", "start": 1.2, "end": 1.3}, {"word": "resultado", "start": 1.4, "end": 2.0}]}
+
+    @app.post("/v1/audio/speech")
+    async def tts(request: Request):
+        b = await request.json()
+        st["voz"].append(["tts", request.headers.get("authorization", ""), b])
+        if st["voz_modo"] == "erro":
+            return JSONResponse({"error": "modelo carregando"}, status_code=500)
+        return Response((Path(os.environ["FAKE_MEDIA_DIR"]) / "trilha.mp3").read_bytes(), media_type="audio/mpeg")
 
     # --- bancos de imagens ---
     @app.get("/img/foto.jpg")

@@ -33,6 +33,9 @@ _ff("-f", "lavfi", "-i", "testsrc=size=800x600:rate=1", "-frames:v", "1", str(ME
 _ff("-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:duration=3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(MEDIA / "video.mp4"))
 _ff("-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:duration=2", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(MEDIA / "mudo.mp4"))
+_ff("-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:duration=4", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+    "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-filter_complex", "[2:a]atrim=duration=2[s];[1:a][s][3:a]concat=n=3:v=0:a=1[a]",
+    "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-t", "4", str(MEDIA / "silencio.mp4"))
 _ff("-f", "lavfi", "-i", "sine=frequency=220:duration=2", "-c:a", "libmp3lame", str(MEDIA / "trilha.mp3"))
 chrome = glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")
 # Nenhuma configuração de usuário via ambiente: só caminhos e endereços de serviços simulados.

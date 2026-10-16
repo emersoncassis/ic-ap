@@ -527,3 +527,25 @@ async def meme_de_texto(con: dict, contexto: str, situacao: str, temperature: fl
         except ValueError as e:
             ultimo = str(e)
     raise ValueError(f"o modelo não entregou um meme válido ({ultimo})")
+
+
+SCHEMA_ROTEIRO = {"type": "object", "properties": {"texto": _STR}, "required": ["texto"]}
+
+
+async def roteiro_narracao(con: dict, contexto: str, pedido: str, temperature: float = 0.8) -> str:
+    """Texto falado (voz em off) para um Story ou Reel curto, no tom do autor."""
+    system = (f"{contexto.strip()}\n\n---\nVocê escreve o roteiro de narração (voz em off) de um Story/Reel curto do próprio autor, em primeira pessoa "
+              "e no tom dele, seguindo o pedido. Entre 15 e 45 palavras, frases curtas e faladas, sem emoji, sem hashtags, sem aspas, sem indicações de cena. "
+              "Use só o que ele contou; não invente fatos. "
+              'Responda SOMENTE com JSON: {"texto": "..."}')
+    ultimo = ""
+    for _ in range(3):
+        try:
+            t = str(parse(await _chat(con, system, f"Pedido do autor: {pedido}{_feedback(ultimo)}", temperature, SCHEMA_ROTEIRO)).get("texto") or "").strip().strip('"')
+            n = len(t.split())
+            if 6 <= n <= 90:
+                return t
+            ultimo = "roteiro vazio ou fora do tamanho (15 a 45 palavras)"
+        except ValueError as e:
+            ultimo = str(e)
+    raise ValueError(f"o modelo não entregou um roteiro válido ({ultimo})")

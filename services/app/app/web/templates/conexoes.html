@@ -55,6 +55,28 @@
 </div>
 <small>Usado em citações com foto de fundo e memes. Imagem do Higgsfield vai com o aviso “gerada por IA” na legenda; foto do Unsplash, com o crédito do fotógrafo.</small>
 
+<h2>Vídeo local: transcrição e voz</h2>
+<p class="mut" style="margin-top:0">Rodam <b>fora do app</b>, no seu PC ou rede, em servidores com a API compatível com a da OpenAI. O Docker enxerga o PC em <code>http://host.docker.internal:PORTA</code>.</p>
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+<form method="post" action="/config/whisper" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <b>Transcrição (Whisper)</b> <small>legendas animadas</small>
+  <p class="mut" style="margin:6px 0 0">Ex.: faster-whisper-server ou whisper.cpp server. Precisa devolver tempo por palavra.</p>
+  <label>Endereço</label><input name="endereco" value="{{ wh.url }}" placeholder="http://host.docker.internal:8000">
+  <label>Modelo</label><input name="modelo" value="{{ wh.modelo }}" placeholder="Systran/faster-whisper-small">
+  <label>Chave <small>(opcional){% if wh.chave %} atual: {{ wh.chave }}{% endif %}</small></label><input type="password" name="chave" autocomplete="off">
+  <div class="acts"><button type="submit">Salvar</button>{% if wh.url %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
+</form>
+<form method="post" action="/config/tts" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <b>Voz (TTS)</b> <small>narração de fotos</small>
+  <p class="mut" style="margin:6px 0 0">Ex.: Kokoro-FastAPI, openedai-speech ou outro servidor com /v1/audio/speech.</p>
+  <label>Endereço</label><input name="endereco" value="{{ tt.url }}" placeholder="http://host.docker.internal:8880">
+  <label>Modelo</label><input name="modelo" value="{{ tt.modelo }}" placeholder="kokoro">
+  <label>Voz</label><input name="voz" value="{{ tt.voz }}" placeholder="pm_alex">
+  <label>Chave <small>(opcional){% if tt.chave %} atual: {{ tt.chave }}{% endif %}</small></label><input type="password" name="chave" autocomplete="off">
+  <div class="acts"><button type="submit">Salvar</button>{% if tt.url %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
+</form>
+</div>
+
 <h2>Geral</h2>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
 <form method="post" action="/config/geral" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
@@ -70,7 +92,7 @@
 <h2>Testes do perfil{% if perfil %}: {{ perfil.nome }}{% endif %}</h2>
 {% if perfil %}
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
-{% for alvo, tit, desc in [('llm','Modelo de linguagem','Gera uma reação de exemplo com a conexão deste perfil.'),('meta','Instagram (Meta)','Confere o token e o IG_USER_ID e mostra a conta.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('banco','Imagens de fundo','Pede uma imagem de teste (Higgsfield gasta créditos).'),('publico','URL pública','Grava um arquivo de teste e busca pela internet.')] %}
+{% for alvo, tit, desc in [('llm','Modelo de linguagem','Gera uma reação de exemplo com a conexão deste perfil.'),('meta','Instagram (Meta)','Confere o token e o IG_USER_ID e mostra a conta.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('whisper','Transcrição','Envia um áudio de teste ao servidor Whisper.'),('tts','Voz','Gera uma frase de teste com o servidor de voz.'),('banco','Imagens de fundo','Pede uma imagem de teste (Higgsfield gasta créditos).'),('publico','URL pública','Grava um arquivo de teste e busca pela internet.')] %}
   <div class="card"><b>{{ tit }}</b><p class="mut" style="margin:4px 0 10px">{{ desc }}</p>
     <form method="post" action="/conexoes/{{ alvo }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}"><button class="sec" type="submit">Testar</button></form></div>
 {% endfor %}

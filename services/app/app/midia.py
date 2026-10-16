@@ -135,3 +135,120 @@ async def adaptar(arquivo: str, formato: str) -> str:
           f"[b]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2")
     await _run("ffmpeg", "-y", "-v", "error", "-i", str(C.CARDS / arquivo), "-filter_complex", fc, "-frames:v", "1", "-q:v", "3", str(C.CARDS / nome))
     return nome
+
+
+# ---------------- vídeo: corte de silêncio, legendas animadas, narração ----------------
+async def cortar_silencio(src: Path, limiar_db: int = -32, minimo: float = 0.5, margem: float = 0.15) -> tuple[Path, float]:
+    """Remove as pausas (silêncio acima de 'minimo' s) e junta os trechos falados, deixando uma margem para não cortar a fala.
+    Devolve (arquivo_novo_em_tmp, segundos_removidos). Se não há o que cortar, devolve o próprio src e 0."""
+    info = await sondar(src)
+    if not info["video"] or not info["audio"]:
+        raise MidiaError("para cortar silêncio o vídeo precisa ter áudio")
+    p = await asyncio.create_subprocess_exec("ffmpeg", "-nostats", "-i", str(src), "-af", f"silencedetect=noise={limiar_db}dB:d={minimo}",
+                                             "-f", "null", "-", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    _, err = await p.communicate()
+    log = err.decode(errors="ignore")
+    inicios = [float(x) for x in re.findall(r"silence_start: (-?[\d.]+)", log)]
+    fins = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", log)]
+    total = info["duracao"]
+    if len(fins) < len(inicios):  # silêncio que vai até o fim do vídeo
+        fins.append(total)
+    manter, cursor = [], 0.0
+    for a, b in zip(inicios, fins):
+        a = max(a, 0.0)
+        ini_corte, fim_corte = a + margem, b - margem
+        if fim_corte - ini_corte < 0.2:
+            continue
+        if ini_corte > cursor:
+            manter.append((cursor, ini_corte))
+        cursor = fim_corte
+    if cursor < total:
+        manter.append((cursor, total))
+    manter = [(a, b) for a, b in manter if b - a > 0.15]
+    removido = total - sum(b - a for a, b in manter)
+    if not manter or removido < 0.3:
+        return src, 0.0
+    partes = "".join(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[v{i}];[0:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}];"
+                     for i, (a, b) in enumerate(manter))
+    juntar = "".join(f"[v{i}][a{i}]" for i in range(len(manter))) + f"concat=n={len(manter)}:v=1:a=1[v][a]"
+    dest = C.DATA / "tmp" / f"{uuid.uuid4().hex}.mp4"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    await _run("ffmpeg", "-y", "-v", "error", "-i", str(src), "-filter_complex", partes + juntar, "-map", "[v]", "-map", "[a]",
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-c:a", "aac", "-b:a", "160k", str(dest))
+    return dest, removido
+
+
+def _ass_cor(hexa: str) -> str:
+    h = hexa.lstrip("#")
+    return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}&".upper()
+
+
+def _ass_tempo(t: float) -> str:
+    t = max(t, 0.0)
+    return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
+
+
+def _ass_texto(w: str) -> str:
+    return re.sub(r"[{}\\]", "", w).upper()
+
+
+def montar_ass(palavras: list[dict], destaque: str = "#ffd166", max_palavras: int = 3, max_chars: int = 20) -> str:
+    """Legenda estilo 'karaokê' para vídeo vertical 1080x1920: poucas palavras por vez, a palavra falada em destaque."""
+    blocos, atual = [], []
+    for w in palavras:
+        if atual and (len(atual) >= max_palavras or sum(len(x["w"]) + 1 for x in atual) + len(w["w"]) > max_chars):
+            blocos.append(atual)
+            atual = []
+        atual.append(w)
+    if atual:
+        blocos.append(atual)
+    cab = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\n\n[V4+ Styles]\n"
+           "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,"
+           "Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
+           "Style: Base,DejaVu Sans,84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,2,2,60,60,520,1\n\n"
+           "[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n")
+    acento = _ass_cor(destaque)
+    linhas = []
+    for b, bloco in enumerate(blocos):
+        proximo = blocos[b + 1][0]["ini"] if b + 1 < len(blocos) else None
+        for i, w in enumerate(bloco):
+            ini = w["ini"]
+            fim = bloco[i + 1]["ini"] if i + 1 < len(bloco) else max(w["fim"], w["ini"] + 0.25)
+            if proximo is not None and i + 1 == len(bloco):
+                fim = min(fim, proximo)  # uma legenda some quando a próxima entra
+            fim = max(fim, ini + 0.08)
+            texto = " ".join((f"{{\\c{acento}}}{_ass_texto(x['w'])}{{\\c&H00FFFFFF&}}" if j == i else _ass_texto(x["w"])) for j, x in enumerate(bloco))
+            linhas.append(f"Dialogue: 0,{_ass_tempo(ini)},{_ass_tempo(fim)},Base,,0,0,0,,{texto}")
+    return cab + "\n".join(linhas) + "\n"
+
+
+async def legendar(arquivo: str, palavras: list[dict], destaque: str = "#ffd166") -> str:
+    """Grava as legendas animadas no vídeo (1080x1920) já pronto em CARDS. Devolve o novo arquivo; o antigo fica para quem chamou apagar."""
+    if not palavras:
+        raise MidiaError("sem palavras para legendar")
+    ass = C.DATA / "tmp" / f"{uuid.uuid4().hex}.ass"
+    ass.parent.mkdir(parents=True, exist_ok=True)
+    ass.write_text(montar_ass(palavras, destaque), encoding="utf-8")
+    nome = f"{uuid.uuid4().hex}.mp4"
+    try:
+        await _run("ffmpeg", "-y", "-v", "error", "-i", str(C.CARDS / arquivo), "-vf", f"ass={ass}", "-c:v", "libx264", "-preset", "veryfast",
+                   "-crf", "22", "-c:a", "copy", "-movflags", "+faststart", str(C.CARDS / nome))
+    finally:
+        ass.unlink(missing_ok=True)
+    return nome
+
+
+async def misturar_voz(voz: Path, musica: Path | None, extra_fim: float = 1.0) -> tuple[Path, float]:
+    """Áudio final da narração: a voz inteira (com 'extra_fim' s de respiro) e, se houver, a trilha baixinha por baixo. Devolve (arquivo, duração)."""
+    dur = (await sondar(voz))["duracao"] + extra_fim
+    dest = C.DATA / "tmp" / f"{uuid.uuid4().hex}.m4a"
+    args = ["ffmpeg", "-y", "-v", "error", "-i", str(voz)]
+    if musica:
+        args += ["-stream_loop", "-1", "-i", str(musica), "-filter_complex",
+                 f"[0:a]apad=pad_dur={extra_fim}[v];[1:a]volume=0.16,afade=t=out:st={max(dur - 1.2, 0):.2f}:d=1.2[m];[v][m]amix=inputs=2:duration=first:dropout_transition=0[a]",
+                 "-map", "[a]"]
+    else:
+        args += ["-af", f"apad=pad_dur={extra_fim}"]
+    args += ["-t", f"{dur:.2f}", "-c:a", "aac", "-b:a", "160k", str(dest)]
+    await _run(*args)
+    return dest, dur
