@@ -12,7 +12,7 @@ Esteira local de conteúdo para Instagram: lê notícias, reage com a minha voz 
 docker compose up -d --build
 ```
 
-Abra http://localhost:8000. No primeiro acesso o app pede para **criar a senha** (e gera sozinho a chave de criptografia em `data/secret.key`; faça backup da pasta `data/`). Depois, tudo no painel:
+Abra http://localhost:8000. No primeiro acesso o app pede para **criar a senha** (e gera sozinho a chave de criptografia em `data/secret.key`; os dados ficam no volume Docker `icap_data`). Depois, tudo no painel:
 
 1. **LLM:** rode seu LLM fora do app (LM Studio, Ollama, Jan, Gemini, Claude...). Informe tipo e endereço, clique **Detectar modelos**, escolha um e **Aplicar e testar**. Do container, use `host.docker.internal` no lugar de `localhost`.
 2. **Conexões e acesso:** token do túnel Cloudflare (`docs/cloudflare-tunnel.md`), URL pública, token do bot do Telegram, fuso horário.

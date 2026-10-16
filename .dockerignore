@@ -1,0 +1,7 @@
+.git
+data
+**/__pycache__
+**/.pytest_cache
+services/app/tests
+docs
+ic-ap.zip

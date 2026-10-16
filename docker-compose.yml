@@ -3,14 +3,16 @@
 # é a sua máquina: use host.docker.internal no campo de endereço do LLM.
 services:
   app:
-    build: ./services/app
+    build:
+      context: .
+      dockerfile: services/app/Dockerfile
     restart: unless-stopped
     environment:
       - TZ=America/Sao_Paulo
     ports: ["127.0.0.1:8000:8000"]   # painel: só local
     extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
-      - ./data:/data                          # banco, chave do app (secret.key) e cards: faça backup
-      - ./templates:/srv/card-templates:ro
-      - ./context:/context:ro
-      - ./config:/config:ro
+      - data:/data                    # banco, chave (secret.key), cards e músicas: volume do Docker, sem compartilhar pasta do Windows
+
+volumes:
+  data:

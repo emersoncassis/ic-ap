@@ -53,7 +53,7 @@ Conexão de LLM configurada no painel (tipo openai-compatível, ollama, gemini o
 
 ## Segredos
 
-Sem `.env`: tudo é configurado no painel e guardado criptografado no SQLite; a chave é gerada em `data/secret.key`.
+Sem `.env`: tudo é configurado no painel e guardado criptografado no SQLite; a chave é gerada em `/data/secret.key` (volume Docker).
 
 ## Não-objetivos da v1
 
