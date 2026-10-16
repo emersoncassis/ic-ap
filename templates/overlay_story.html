@@ -10,9 +10,10 @@
   .rule{width:120px;height:8px;background:var(--acc);margin-bottom:34px}
   .txt{color:#f6f4ee;font-size:{{ tamanho }}px;line-height:1.12;font-weight:800;letter-spacing:-1px;text-shadow:0 3px 24px rgba(0,0,0,.55)}
   .by{margin-top:30px;color:#c9ced6;font-size:30px;font-weight:600}
+  .men{margin-top:28px;display:flex;flex-wrap:wrap;gap:14px}.men span{background:rgba(255,255,255,.92);color:#111;font-weight:800;font-size:44px;padding:8px 24px;border-radius:14px}
   {{ marca_css|safe }}
   html,body{background:transparent}
 </style></head>
 <body><div class="scrim"></div>
-<div class="box"><div class="rule"></div><div class="txt">{{ texto }}</div>{% if handle %}<div class="by">{{ handle }}</div>{% endif %}</div>
+<div class="box">{% if texto %}<div class="rule"></div><div class="txt">{{ texto }}</div>{% endif %}{% if mencoes %}<div class="men">{% for m in mencoes %}<span>{{ m }}</span>{% endfor %}</div>{% endif %}{% if handle %}<div class="by">{{ handle }}</div>{% endif %}</div>
 </body></html>

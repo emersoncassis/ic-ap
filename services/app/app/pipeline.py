@@ -413,16 +413,18 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
         if not musica:
             avisos.append("ℹ️ Pediu música, mas não há músicas cadastradas (menu Músicas do painel).")
     texto_tela, overlay = "", None
+    mencoes = list(dict.fromkeys(m.rstrip(".") for m in re.findall(r"@[A-Za-z0-9_.]{2,30}", texto or "")))
     if formato == "story" and ped["texto"]:
         if not con or not con["modelo"]:
             avisos.append("⚠️ Nenhum LLM configurado: Story sem texto na tela.")
         else:
             try:
                 texto_tela = await llm.texto_story(con, p["contexto_md"], descricao or texto)
-                overlay = await render.overlay_story(texto_tela, "", p)
             except Exception as e:
                 db.log(p["id"], None, "texto_story_falhou", str(e))
                 avisos.append(f"⚠️ Não consegui escrever o texto da tela: {str(e)[:120]}")
+    if formato == "story" and (texto_tela or mencoes):
+        overlay = await render.overlay_story(texto_tela, "", p, mencoes)
     try:
         if tipo == "video":
             arquivo = await midia.video(src, formato, musica, overlay)
@@ -435,6 +437,8 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
     finally:
         if overlay:
             Path(overlay).unlink(missing_ok=True)
+    if formato == "story" and mencoes:
+        avisos.append("ℹ️ Menção no Story: aparece escrita na imagem. O Instagram não deixa apps criarem o adesivo clicável; se quiser, adicione o adesivo @menção no app antes de publicar.")
     legenda = ""
     if formato != "story":
         if not descricao:
@@ -443,6 +447,9 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
             avisos.append("⚠️ Nenhum LLM configurado: legenda em branco.")
         else:
             legenda = await llm.legenda_midia(con, p["contexto_md"], descricao, "vídeo" if tipo == "video" else "foto")
+            falta = [m for m in mencoes if m.lower() not in legenda.lower()]
+            if falta:
+                legenda += "\n\n" + " ".join(falta)
     pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,criado_em,atualizado_em)"
                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                (p["id"], "aguardando_aprovacao", (descricao or "Mídia do Telegram")[:120], "Telegram", descricao, texto_tela, legenda,

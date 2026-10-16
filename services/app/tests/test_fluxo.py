@@ -1048,3 +1048,19 @@ def _rodar(coro):
         out["v"] = asyncio.run(coro)
     t = threading.Thread(target=alvo); t.start(); t.join()
     return out["v"]
+
+
+def test_mencao_no_story_aparece_na_imagem_e_no_feed_vai_na_legenda(logado, fake):
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story com @iagocarvalho e @igor.carvalho")
+    p = _novo_post(n)
+    assert p["formato"] == "story" and p["arquivo"].endswith(".jpg") and not fake.st()["llm_users"], "só a menção, sem texto pedido: não chama o LLM"
+    esperar(lambda: any(m == "sendPhoto" and "adesivo clicável" in d["caption"] for m, d in fake.st()["tg"]))
+    # as caixas brancas das menções deixam pixels claros na zona segura (sem elas a foto de teste não tem branco ali)
+    assert any(_perto(_pixel(C.CARDS / p["arquivo"], x, y), (235, 235, 235), 25) for x in range(76, 92, 4) for y in range(1470, 1560, 6))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    n = _n_midia()
+    fake.push_msg(42, "foto", "feed: treino com @iagocarvalho")
+    p = _novo_post(n)
+    assert "@iagocarvalho" in p["legenda"]
+    post_form(logado, f"/posts/{p['id']}/descartar")
