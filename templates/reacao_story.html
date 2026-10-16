@@ -24,5 +24,5 @@
   {% if print_uri %}<div class="print"><img src="{{ print_uri }}" alt=""></div>{% endif %}
   <div class="rule"></div>
   <div class="body">{% for p in paragrafos %}<p>{{ p }}</p>{% endfor %}</div>
-  <div class="foot">Fonte: {{ fonte }}</div>
+  {% if fonte %}<div class="foot">Fonte: {{ fonte }}</div>{% endif %}
 </div></body></html>

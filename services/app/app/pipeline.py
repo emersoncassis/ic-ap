@@ -7,6 +7,8 @@ from . import config as C, crypto, db, feeds, ig, llm, midia, render, settings, 
 
 RUNNING: set[int] = set()
 MAX_FALHAS = 3
+FONTE_TEXTO = "Texto"  # posts criados a partir de uma ideia (conversa do Telegram)
+_GERACAO = asyncio.Lock()  # uma geração por vez: poupa a GPU local
 ESTADOS_ABERTOS = ("aguardando_aprovacao", "rascunho", "agendado", "falhou")
 ANGULOS = ["opinião direta e provocativa, no formato 'Não é X, é Y'",
            "explicação simples para quem não é da área, com um exemplo do dia a dia",
@@ -50,6 +52,19 @@ def _apagar(*nomes) -> None:
     for n in nomes:
         if n and re.fullmatch(r"[0-9a-f]{32}\.(jpg|mp4)", n):
             (C.CARDS / n).unlink(missing_ok=True)
+
+
+def arquivos_do_post(po: dict) -> list[str]:
+    """Todos os arquivos do post: os slides do carrossel, ou o arquivo único."""
+    try:
+        lst = json.loads(po.get("arquivos") or "[]")
+    except ValueError:
+        lst = []
+    return [a for a in lst if isinstance(a, str)] or ([po["arquivo"]] if po.get("arquivo") else [])
+
+
+def _apagar_post(po: dict) -> None:
+    _apagar(*arquivos_do_post(po))
 
 
 async def gerar(perfil_id: int, n: int = 1, origem: str = "manual") -> int:
@@ -137,16 +152,17 @@ async def _processar(post_id: int, p: dict, temperature: float, destino: str = "
 
 async def refazer(post_id: int) -> bool:
     po = post(post_id)
+    if po and po["fonte"] == FONTE_TEXTO:
+        return await _refazer_texto(po)
     if po and not po["noticia_url"]:  # mídia enviada por você: só a legenda muda
         return await _refazer_legenda(po)
     if not po or not _claim(post_id, ESTADOS_ABERTOS, "extraido"):
         return False
-    old = po["arquivo"]
     p = perfil(po["perfil_id"])
     destino = "rascunho" if po["estado"] in ("rascunho", "agendado") else "aguardando_aprovacao"
     ok = await _processar(post_id, p, temperature=0.95, destino=destino)
     if ok:
-        _apagar(old)
+        _apagar_post(po)
         db.log(p["id"], post_id, "refeito")
         if po["tg_message_id"] and p["telegram_chat_id"]:
             await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], "Refeito. Nova versão abaixo.")
@@ -155,20 +171,27 @@ async def refazer(post_id: int) -> bool:
 
 async def aprovar(post_id: int, origem: str = "painel") -> bool:
     po = post(post_id)
-    if not po or not po["arquivo"] or not (C.CARDS / po["arquivo"]).exists():
+    arqs = arquivos_do_post(po) if po else []
+    if not arqs or not all((C.CARDS / a).exists() for a in arqs):
         return False
     if not _claim(post_id, ESTADOS_ABERTOS, "publicando"):
         return False
     p = perfil(po["perfil_id"])
-    pub = C.PUBLIC / po["arquivo"]
+    pubs: list = []
     try:
         base = settings.base_url()
         if not base:
             raise ig.MetaError("URL pública não configurada (menu Conexões)")
         if not p["ig_user_id"] or not p["ig_token_enc"]:
             raise ig.MetaError("perfil sem ig_user_id ou token")
-        shutil.copyfile(C.CARDS / po["arquivo"], pub)
-        media = await ig.publicar(p["ig_user_id"], crypto.dec(p["ig_token_enc"]), f"{base}/{po['arquivo']}", po["legenda"], po["formato"])
+        for a in arqs:
+            shutil.copyfile(C.CARDS / a, C.PUBLIC / a)
+            pubs.append(C.PUBLIC / a)
+        token = crypto.dec(p["ig_token_enc"])
+        if po["formato"] == "carrossel":
+            media = await ig.publicar_carrossel(p["ig_user_id"], token, [f"{base}/{a}" for a in arqs], po["legenda"])
+        else:
+            media = await ig.publicar(p["ig_user_id"], token, f"{base}/{arqs[0]}", po["legenda"], po["formato"])
         _set(post_id, "publicado", media_id=media, erro=None, agendado_para=None)
         db.log(p["id"], post_id, "publicado", f"{origem} media={media}")
         resultado = "✅ Publicado."
@@ -177,7 +200,8 @@ async def aprovar(post_id: int, origem: str = "painel") -> bool:
         db.log(p["id"], post_id, "falhou_publicar", str(e))
         resultado = f"❌ Falha ao publicar: {str(e)[:200]}"
     finally:
-        pub.unlink(missing_ok=True)  # a imagem só fica pública durante o publish
+        for f in pubs:
+            f.unlink(missing_ok=True)  # a imagem só fica pública durante o publish
     if po["tg_message_id"] and p["telegram_chat_id"]:
         await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], resultado)
     return resultado.startswith("✅")
@@ -187,7 +211,7 @@ async def descartar(post_id: int, origem: str = "painel") -> bool:
     po = post(post_id)
     if not po or not _claim(post_id, ESTADOS_ABERTOS, "descartado"):
         return False
-    _apagar(po["arquivo"])
+    _apagar_post(po)
     p = perfil(po["perfil_id"])
     db.log(p["id"], post_id, "descartado", origem)
     if po["tg_message_id"] and p["telegram_chat_id"]:
@@ -196,6 +220,9 @@ async def descartar(post_id: int, origem: str = "painel") -> bool:
 
 
 async def acao_telegram(acao: str, post_id: int, chat_id: str) -> None:
+    if acao in ("sp", "np"):  # confirmar / ajustar o perfil proposto na conversa (post_id é o id do perfil)
+        await _acao_perfil(acao, post_id, chat_id)
+        return
     po = post(post_id)
     p = perfil(po["perfil_id"]) if po else None
     if not p or str(p["telegram_chat_id"]) != chat_id:
@@ -307,8 +334,12 @@ async def publicar_agendados() -> int:
 
 
 # ---------------- foto/vídeo enviados pelo Telegram ----------------
-AJUDA = ("Mande uma foto ou um vídeo com uma frase de contexto na legenda. Eu ajusto o formato, escrevo a legenda no seu tom "
-         "e devolvo aqui para aprovar.\nPalavras que mudam o destino: story, reel, feed, “sem música”.")
+AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
+         "• Montar/rever o perfil: /perfil (eu faço perguntas e proponho o texto; você confirma)\n"
+         "• Ideias de posts: /ideias, ou peça um tema\n"
+         "• Gerar: “faz um carrossel de 6 slides sobre X”, “um story sobre Y”, “2 versões para testar”\n"
+         "• Foto ou vídeo com uma frase na legenda vira post (palavras: story, reel, feed, “sem música”)\n"
+         "• /novo zera a conversa")
 
 
 async def _refazer_legenda(po: dict) -> bool:
@@ -388,7 +419,7 @@ async def mensagem_telegram(msg: dict) -> None:
         d = msg["document"]
         m = ("video" if d["mime_type"].startswith("video/") else "foto", d, ".bin")
     if not m:
-        await telegram.avisar(chat_id, AJUDA)
+        await _texto_telegram(p, chat_id, texto.strip())
         return
     tipo, arq, ext = m
     if (arq.get("file_size") or 0) > telegram.MAX_DOWNLOAD:
@@ -411,3 +442,233 @@ async def mensagem_telegram(msg: dict) -> None:
 def uuid_hex() -> str:
     import uuid
     return uuid.uuid4().hex
+
+
+
+# ---------------- ideia (texto) -> post / carrossel ----------------
+async def _processar_texto(post_id: int, p: dict, temperature: float, destino: str = "aguardando_aprovacao",
+                           n_slides: int | None = None, aviso: str = "") -> bool:
+    po = post(post_id)
+    formato = po["formato"]
+    novos: list[str] = []
+    try:
+        con = conexao_do_perfil(p)
+        if not con or not con["modelo"]:
+            raise ValueError("nenhuma conexão de LLM com modelo escolhido: configure em LLM")
+        ideia, estrategia = po["texto"], po["angulo"] or None
+        n = n_slides or len(arquivos_do_post(po)) or 6
+        feedback, res = None, None
+        for _ in range(3):
+            _apagar(*novos)
+            novos = []
+            try:
+                if formato == "carrossel":
+                    res = await llm.carrossel_de_texto(con, p["contexto_md"], ideia, n, temperature, estrategia, feedback)
+                    total, longo = len(res["slides"]), None
+                    for i, sl in enumerate(res["slides"], 1):
+                        tipo = "capa" if i == 1 else ("cta" if i == total else "conteudo")
+                        nome, estourou = await render.slide(sl["titulo"], sl["texto"], i, total, p["handle"], p["nome"], tipo)
+                        novos.append(nome)
+                        if estourou and longo is None:
+                            longo = i
+                    if longo:
+                        feedback = f"o slide {longo} não coube na imagem, encurte titulo e texto de todos os slides"
+                        continue
+                else:
+                    res = await llm.post_de_texto(con, p["contexto_md"], ideia, temperature, estrategia, feedback)
+                    nome, estourou = await render.card(res["manchete_curta"], res["texto_card"], "", p["handle"], p["nome"], formato)
+                    novos = [nome]
+                    if estourou:
+                        feedback = "texto_card não coube no card, encurte"
+                        continue
+            except ValueError as e:
+                feedback = str(e)
+                continue
+            break
+        else:
+            res = None  # as 3 tentativas falharam
+        if not res or not novos:
+            raise ValueError(f"o modelo não entregou uma saída válida em 3 tentativas ({feedback})")
+        if formato == "carrossel":
+            manchete, reacao = res["slides"][0]["titulo"], "\n\n".join(f"{x['titulo']}: {x['texto']}".strip(": ") for x in res["slides"][1:])
+        else:
+            manchete, reacao = res["manchete_curta"], res["texto_card"]
+        _set(post_id, destino, json_llm=json.dumps(res, ensure_ascii=False), manchete=manchete, reacao=reacao,
+             legenda=res["legenda"], arquivo=novos[0], arquivos=json.dumps(novos) if formato == "carrossel" else "", erro=None)
+        db.log(p["id"], post_id, "gerado_texto", f"{formato} v{po['variacao']}")
+        if destino == "aguardando_aprovacao" and telegram.ativo() and p["telegram_chat_id"]:
+            try:
+                caminhos = [C.CARDS / a for a in novos]
+                if formato == "carrossel":
+                    mid = await telegram.enviar_carrossel(p["telegram_chat_id"], caminhos, post_id, res["legenda"], aviso)
+                else:
+                    mid = await telegram.enviar_card(p["telegram_chat_id"], caminhos[0], post_id, res["legenda"], aviso)
+                db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, post_id))
+            except Exception as e:
+                db.log(p["id"], post_id, "telegram_falhou", str(e))
+        return True
+    except Exception as e:
+        _apagar(*novos)
+        msg = (str(e) or type(e).__name__)[:400]
+        _set(post_id, "falhou", erro=msg)
+        db.log(p["id"], post_id, "falhou", msg)
+        if destino == "aguardando_aprovacao" and telegram.ativo() and p["telegram_chat_id"]:
+            await telegram.avisar(p["telegram_chat_id"], f"Falha ao gerar post #{post_id}: {msg[:200]}")
+        return False
+
+
+async def criar_de_texto(perfil_id: int, ideia: str, formato: str = "feed", n_slides: int = 6, variacoes: int = 1,
+                         destino: str = "aguardando_aprovacao") -> list[int]:
+    """Cria o post (ou as variações de teste A/B, com manchete e chamada diferentes) a partir de uma ideia. Devolve os ids que deram certo."""
+    p = perfil(perfil_id)
+    ideia = (ideia or "").strip()
+    if not p or len(ideia) < 8:
+        return []
+    formato = formato if formato in ("feed", "story", "carrossel") else "feed"
+    variacoes = max(1, min(int(variacoes), len(llm.ESTRATEGIAS_AB)))
+    ids: list[int] = []
+    grupo = None
+    async with _GERACAO:
+        for v in range(1, variacoes + 1):
+            est = llm.ESTRATEGIAS_AB[v - 1] if variacoes > 1 else ""
+            pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,variacao,grupo,formato,angulo,criado_em,atualizado_em)"
+                       " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                       (perfil_id, "capturado", ideia[:120], FONTE_TEXTO, ideia, v, grupo, formato, est, db.now(), db.now()))
+            if grupo is None:
+                grupo = pid
+                db.x("UPDATE posts SET grupo=? WHERE id=?", (pid, pid))
+            aviso = f"🅰️ Versão {v} de {variacoes}: {est}" if est else ""
+            if await _processar_texto(pid, p, 0.8, destino, n_slides, aviso):
+                ids.append(pid)
+    return ids
+
+
+async def _refazer_texto(po: dict) -> bool:
+    if not _claim(po["id"], ESTADOS_ABERTOS, "extraido"):
+        return False
+    p = perfil(po["perfil_id"])
+    destino = "rascunho" if po["estado"] in ("rascunho", "agendado") else "aguardando_aprovacao"
+    ok = await _processar_texto(po["id"], p, 0.95, destino)
+    if ok:
+        _apagar_post(po)
+        db.log(p["id"], po["id"], "refeito")
+        if po["tg_message_id"] and p["telegram_chat_id"]:
+            await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], "Refeito. Nova versão abaixo.")
+    return ok
+
+
+async def novas_hashtags(post_id: int) -> bool:
+    """Troca as hashtags da legenda por um conjunto novo (nicho + médias + amplas)."""
+    po = post(post_id)
+    if not po or po["estado"] not in ESTADOS_ABERTOS:
+        return False
+    p = perfil(po["perfil_id"])
+    con = conexao_do_perfil(p)
+    base = re.sub(r"(?:\s*#\w+)+\s*$", "", po["legenda"] or "").rstrip()
+    try:
+        tags = await llm.hashtags_para(con, p["contexto_md"], po["reacao"] or po["texto"] or base or po["manchete"] or "")
+    except Exception as e:
+        db.log(p["id"], post_id, "falhou_hashtags", str(e))
+        return False
+    db.x("UPDATE posts SET legenda=?, atualizado_em=? WHERE id=?", ((base + "\n\n" + " ".join(tags)).strip(), db.now(), post_id))
+    db.log(p["id"], post_id, "hashtags_novas")
+    return True
+
+
+# ---------------- conversa de brainstorming pelo Telegram ----------------
+HIST_MAX = 24
+
+
+def _historico(chat_id: str) -> list[dict]:
+    rows = db.q("SELECT papel, texto FROM conversas WHERE chat_id=? ORDER BY id DESC LIMIT ?", (chat_id, HIST_MAX))
+    return [{"role": r["papel"], "content": r["texto"]} for r in reversed(rows)]
+
+
+def _guardar(chat_id: str, papel: str, texto: str) -> None:
+    db.x("INSERT INTO conversas(chat_id,papel,texto,criado_em) VALUES(?,?,?,?)", (chat_id, papel, texto[:4000], db.now()))
+    db.x("DELETE FROM conversas WHERE chat_id=? AND id NOT IN (SELECT id FROM conversas WHERE chat_id=? ORDER BY id DESC LIMIT 200)",
+         (chat_id, chat_id))
+
+
+ATALHOS = {"/start": "Oi! Acabei de abrir o bot.",
+           "/perfil": "Quero montar ou revisar o meu perfil. Me entreviste.",
+           "/ideias": "Me dê ideias de posts para hoje, com base no meu perfil."}
+
+
+async def _texto_telegram(p: dict, chat_id: str, texto: str) -> None:
+    cmd = texto.split()[0].lower().split("@")[0] if texto.startswith("/") else ""
+    if cmd in ("/ajuda", "/help") or not texto:
+        await telegram.avisar(chat_id, AJUDA)
+    elif cmd == "/novo":
+        db.x("DELETE FROM conversas WHERE chat_id=?", (chat_id,))
+        await telegram.avisar(chat_id, "Conversa zerada. Pode começar de novo.")
+    elif cmd in ATALHOS:
+        await _conversar(p, chat_id, ATALHOS[cmd])
+    elif cmd:
+        await telegram.avisar(chat_id, AJUDA)
+    else:
+        await _conversar(p, chat_id, texto)
+
+
+async def _conversar(p: dict, chat_id: str, texto: str) -> None:
+    p = perfil(p["id"])  # perfil atualizado (o contexto pode ter mudado na conversa)
+    con = conexao_do_perfil(p)
+    if not con or not con["modelo"]:
+        await telegram.avisar(chat_id, "Ainda não há um modelo de linguagem configurado. Configure no painel (menu LLM).")
+        return
+    await telegram.digitando(chat_id)
+    try:
+        r = await llm.conversar(con, p, _historico(chat_id), texto)
+    except Exception as e:
+        db.log(p["id"], None, "conversa_falhou", str(e))
+        await telegram.avisar(chat_id, f"Não consegui responder agora: {str(e)[:200]}")
+        return
+    _guardar(chat_id, "user", texto)
+    _guardar(chat_id, "assistant", r["resposta"])
+    await telegram.avisar(chat_id, r["resposta"])
+    if r["acao"] == "propor_perfil":
+        await _propor_perfil(p, chat_id, r)
+    elif r["acao"] == "gerar":
+        g = r["gerar"]
+        ids = await criar_de_texto(p["id"], g["ideia"], g["formato"], g["n_slides"], g["variacoes"], "aguardando_aprovacao")
+        db.log(p["id"], None, "gerado_da_conversa", f"{g['formato']} x{g['variacoes']} -> {len(ids)}")
+
+
+def _horarios_validos(txt: str) -> str:
+    return ",".join(h.strip() for h in (txt or "").split(",") if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", h.strip()))
+
+
+async def _propor_perfil(p: dict, chat_id: str, r: dict) -> None:
+    prop = {"perfil_md": r["perfil_md"], "palavras_chave": r["palavras_chave"], "horarios": _horarios_validos(r["horarios"])}
+    db.set_setting(f"propostaperfil:{p['id']}", json.dumps(prop, ensure_ascii=False))
+    previa = r["perfil_md"] if len(r["perfil_md"]) <= 3200 else r["perfil_md"][:3200] + "\n[…]"
+    extra = (f"\n\nTemas para buscar notícias: {prop['palavras_chave']}" if prop["palavras_chave"] else "") + \
+            (f"\nHorários: {prop['horarios']}" if prop["horarios"] else "")
+    await telegram.enviar_botoes(chat_id, f"Proposta de perfil:\n\n{previa}{extra}",
+                                 [[("✅ Salvar perfil", f"sp:{p['id']}"), ("✏️ Ajustar", f"np:{p['id']}")]])
+
+
+async def _acao_perfil(acao: str, perfil_id: int, chat_id: str) -> None:
+    p = perfil(perfil_id)
+    if not p or str(p["telegram_chat_id"]) != chat_id:
+        return  # só o dono do perfil mexe nele
+    chave = f"propostaperfil:{perfil_id}"
+    raw = db.get_setting(chave)
+    if not raw:
+        await telegram.avisar(chat_id, "Essa proposta já foi tratada ou expirou. Peça /perfil de novo.")
+        return
+    if acao == "np":
+        db.x("DELETE FROM settings WHERE k=?", (chave,))
+        _guardar(chat_id, "user", "Quero ajustar a proposta de perfil.")
+        await telegram.avisar(chat_id, "Ok, não salvei. O que você quer mudar?")
+        return
+    prop = json.loads(raw)
+    db.x("UPDATE perfis SET contexto_md=? WHERE id=?", (prop["perfil_md"], perfil_id))
+    if prop.get("palavras_chave"):
+        db.x("UPDATE perfis SET palavras_chave=? WHERE id=?", (prop["palavras_chave"], perfil_id))
+    if prop.get("horarios"):
+        db.x("UPDATE perfis SET horarios=? WHERE id=?", (prop["horarios"], perfil_id))
+    db.x("DELETE FROM settings WHERE k=?", (chave,))
+    db.log(perfil_id, None, "perfil_salvo_telegram")
+    _guardar(chat_id, "user", "Salvei a proposta de perfil.")
+    await telegram.avisar(chat_id, "✅ Perfil salvo. A partir de agora escrevo com ele. Quer ideias de posts? Mande /ideias.")

@@ -53,3 +53,22 @@ async def card(manchete: str, reacao: str, fonte: str, handle: str, nome: str,
     finally:
         await page.close()
     return name, estourou
+
+
+async def slide(titulo: str, texto: str, idx: int, total: int, handle: str, nome: str, tipo: str = "conteudo") -> tuple[str, bool]:
+    """Um slide de carrossel 1080x1350. tipo: capa | conteudo | cta. Devolve (arquivo, texto_estourou)."""
+    env = Environment(loader=FileSystemLoader(str(C.CARD_TEMPLATES)), autoescape=select_autoescape(["html"]))
+    paragrafos = [p.strip() for p in re.split(r"\n\s*\n|\n", texto or "") if p.strip()]
+    html = env.get_template("carrossel.html").render(titulo=titulo, paragrafos=paragrafos, idx=idx, total=total,
+                                                      handle=handle, nome=nome, tipo=tipo)
+    name = f"{uuid.uuid4().hex}.jpg"
+    page = await _state["browser"].new_page(viewport={"width": 1080, "height": 1350})
+    try:
+        await page.set_content(html, wait_until="load")
+        estourou = await page.evaluate(
+            "() => { const b = document.querySelector('.body'), m = document.querySelector('.mid');"
+            " return (b && b.scrollHeight > b.clientHeight + 2) || m.scrollHeight > m.clientHeight + 2 }")
+        await page.screenshot(path=str(C.CARDS / name), type="jpeg", quality=90)
+    finally:
+        await page.close()
+    return name, estourou

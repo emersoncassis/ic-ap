@@ -1,5 +1,5 @@
 """Serviços simulados: RSS + artigos, Ollama, Graph API da Meta, Telegram e o 'nginx' público."""
-import asyncio, json, os
+import asyncio, json, os, re
 from pathlib import Path
 from datetime import datetime, timezone
 from email.utils import format_datetime
@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 def make(port: int) -> FastAPI:
     app = FastAPI()
-    st = {"openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False}
+    st = {"agente": [], "carrossel_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False}
     app.state.st = st
 
     @app.get("/_st")
@@ -20,7 +20,7 @@ def make(port: int) -> FastAPI:
 
     @app.post("/_reset")
     def _reset(request: Request):
-        st.update(llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[])
+        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[])
         return {}
 
     @app.post("/_set")
@@ -73,8 +73,29 @@ def make(port: int) -> FastAPI:
         return Response(f"<html><head><title>Notícia {n}</title></head><body><article><h1>Notícia {n}</h1>{par}</article></body></html>",
                         media_type="text/html")
 
-    def conteudo(user_text: str) -> str:
+    def conteudo(user_text: str, system: str = "", turnos: int = 1) -> str:
         st["llm_users"].append(user_text)
+        st["llm_turnos"].append(turnos)
+        if "assistente de brainstorming" in system:
+            r = st["agente"].pop(0) if st["agente"] else {"resposta": "Oi! Vamos montar seu perfil. Quem é você e o que faz?", "acao": "conversar"}
+            base = {"perfil_md": "", "palavras_chave": "", "horarios": "", "gerar": {"formato": "feed", "ideia": "", "n_slides": 0, "variacoes": 1}}
+            return json.dumps({**base, **r}, ensure_ascii=False)
+        if "monta um carrossel" in system:
+            n = int(re.search(r"EXATAMENTE (\d+) slides", system).group(1))
+            slides = [{"titulo": f"Slide {i} da ideia", "texto": ("palavra " * 50 if st["carrossel_modo"] == "estoura" and i == 2 else f"Texto curto do slide {i}.")}
+                      for i in range(1, n + 1)]
+            if st["carrossel_modo"] == "estoura":
+                st["carrossel_modo"] = "ok"
+            return json.dumps({"slides": slides, "legenda_instagram": "Carrossel sobre a ideia.", "cta": "Salve este post.",
+                               "hashtags": ["ia", "#Empresas", "tecnologia", "gestão", "#ia", "dados privados", "ysafe", "saude digital"]}, ensure_ascii=False)
+        if "escreve um post de Instagram (imagem" in system:
+            v = re.search(r"Estratégia desta versão: ([^.]*)\.", user_text)
+            return json.dumps({"manchete_curta": "Dado na mão da empresa" + (f" ({v.group(1)[:12]})" if v else ""),
+                               "texto_card": "Não é moda, é controle.\n\nPergunte onde o dado fica.",
+                               "legenda_instagram": "Minha ideia de hoje: " + user_text[:60].replace("\n", " "), "cta": "Comente o que você acha.",
+                               "hashtags": ["#ia", "#empresas", "#dados", "#privacidade", "#tecnologia", "#gestao", "#ysafe", "#startup"]}, ensure_ascii=False)
+        if "sugere hashtags" in system:
+            return json.dumps({"hashtags": ["#novatag1", "#novatag2", "#novatag3", "#novatag4"]})
         ok = {"manchete_curta": "IA vira prioridade nas empresas",
               "minha_reacao": "Não é moda, é controle.\n\nMinha leitura: pergunte onde o dado fica.",
               "legenda_instagram": "Minha leitura sobre a notícia. #ia #empresas #tecnologia",
@@ -97,7 +118,7 @@ def make(port: int) -> FastAPI:
     @app.post("/api/chat")
     async def chat(request: Request):
         b = await request.json()
-        return {"message": {"role": "assistant", "content": conteudo(b["messages"][-1]["content"])}}
+        return {"message": {"role": "assistant", "content": conteudo(b["messages"][-1]["content"], b["messages"][0]["content"], len(b["messages"]) - 1)}}
 
     # --- OpenAI-compatível (LM Studio, Jan, llama.cpp…) ---
     @app.get("/v1/models")
@@ -110,7 +131,7 @@ def make(port: int) -> FastAPI:
         b = await request.json()
         if st["openai_no_format"] and "response_format" in b:
             return JSONResponse({"error": {"message": "response_format não suportado"}}, status_code=400)
-        return {"choices": [{"message": {"role": "assistant", "content": conteudo(b["messages"][-1]["content"])}}]}
+        return {"choices": [{"message": {"role": "assistant", "content": conteudo(b["messages"][-1]["content"], b["messages"][0]["content"], len(b["messages"]) - 1)}}]}
 
     # --- Gemini ---
     @app.get("/gemini/models")
@@ -123,7 +144,7 @@ def make(port: int) -> FastAPI:
     @app.post("/gemini/models/{m}:generateContent")
     async def gem_gen(m: str, request: Request):
         b = await request.json()
-        return {"candidates": [{"content": {"parts": [{"text": conteudo(b["contents"][0]["parts"][0]["text"])}]}}]}
+        return {"candidates": [{"content": {"parts": [{"text": conteudo(b["contents"][-1]["parts"][0]["text"], b["systemInstruction"]["parts"][0]["text"], len(b["contents"]))}]}}]}
 
     # --- Anthropic ---
     @app.get("/anthropic/models")
@@ -135,7 +156,7 @@ def make(port: int) -> FastAPI:
     @app.post("/anthropic/messages")
     async def ant_msg(request: Request):
         b = await request.json()
-        return {"content": [{"type": "text", "text": conteudo(b["messages"][0]["content"])}]}
+        return {"content": [{"type": "text", "text": conteudo(b["messages"][-1]["content"], b.get("system", ""), len(b["messages"]))}]}
 
     # --- assistente de token da Meta ---
     @app.get("/graph/oauth/access_token")
@@ -160,6 +181,12 @@ def make(port: int) -> FastAPI:
         p = dict(request.query_params)
         if st["graph_fail"]:
             return JSONResponse({"error": {"message": "Invalid OAuth access token.", "code": 190}}, status_code=400)
+        if p.get("media_type") == "CAROUSEL":
+            st["graph"].append(["media", p])
+            filhos = p.get("children", "").split(",")
+            if len(filhos) < 2 or not all(f.startswith("ITEM") for f in filhos):
+                return JSONResponse({"error": {"message": "children inválidos", "code": 100}}, status_code=400)
+            return {"id": "CARR1"}
         url = p.get("image_url") or p.get("video_url")
         async with httpx.AsyncClient() as c:  # a Meta precisa conseguir BUSCAR a mídia pela URL pública
             r = await c.get(url)
@@ -168,13 +195,19 @@ def make(port: int) -> FastAPI:
         if r.status_code != 200 or not (jpeg if "image_url" in p else mp4):
             return JSONResponse({"error": {"message": "Falha ao baixar a mídia", "code": 9004}}, status_code=400)
         st["graph"].append(["media", p])
+        if p.get("is_carousel_item") == "true":
+            return {"id": f"ITEM{sum(1 for g in st['graph'] if g[0] == 'media')}"}
         return {"id": "CONT1"}
 
-    @app.get("/graph/CONT1")
-    def g_status():
+    @app.get("/graph/{cid}")
+    def g_status(cid: str, request: Request):
+        if not (cid.startswith(("ITEM", "CARR")) or cid == "CONT1"):
+            return {"username": "emerson_teste", "id": cid}
+        if "status_code" not in request.query_params.get("fields", ""):
+            return {"username": "emerson_teste", "id": cid}
         n = sum(1 for g in st["graph"] if g[0] == "status") + 1
-        st["graph"].append(["status", {}])
-        return {"status_code": "FINISHED" if n > 1 else "IN_PROGRESS"}
+        st["graph"].append(["status", {"id": cid}])
+        return {"status_code": "FINISHED" if n % 2 == 0 else "IN_PROGRESS"}
 
     @app.post("/graph/{ig}/media_publish")
     async def g_pub(ig: str, request: Request):
@@ -188,10 +221,6 @@ def make(port: int) -> FastAPI:
     @app.get("/graph/{ig}/content_publishing_limit")
     def g_limit(ig: str):
         return {"data": [{"quota_usage": 1}]}
-
-    @app.get("/graph/{ig}")
-    def g_conta(ig: str):
-        return {"username": "emerson_teste", "id": ig}
 
     # --- Telegram ---
     @app.post("/bot{token}/{metodo}")

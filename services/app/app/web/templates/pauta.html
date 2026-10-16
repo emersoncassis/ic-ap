@@ -30,7 +30,7 @@
       <button class="bad" type="submit" name="acao" value="descartar" onclick="return confirm('Descartar os selecionados?')">Descartar selecionados</button></div>
   </div>
   {% for g in grupos %}
-  <h2>{{ g[0].noticia_titulo }} <small>· {{ g[0].fonte }} · <a href="{{ g[0].noticia_url }}" target="_blank" rel="noopener">fonte</a></small></h2>
+  <h2>{{ g[0].noticia_titulo }} <small>· {{ g[0].fonte }}{% if g[0].noticia_url %} · <a href="{{ g[0].noticia_url }}" target="_blank" rel="noopener">fonte</a>{% endif %}{% if g[0].formato == 'carrossel' %} · carrossel{% endif %}</small></h2>
   <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr))">
     {% for p in g %}
     <div class="card">

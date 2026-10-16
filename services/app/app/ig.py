@@ -33,21 +33,39 @@ def _params_midia(url: str, legenda: str, formato: str) -> dict:
     return {"image_url": url, "caption": legenda}
 
 
+async def _esperar(c: httpx.AsyncClient, cid: str, token: str, video: bool = False) -> None:
+    tentativas = C.IG_POLL_TRIES * (10 if video else 1)  # vídeo demora mais
+    for _ in range(tentativas):
+        st = (await _graph(c, "GET", cid, token, fields="status_code")).get("status_code")
+        if st == "FINISHED":
+            return
+        if st in ("ERROR", "EXPIRED"):
+            raise MetaError(f"container em {st}")
+        await asyncio.sleep(C.IG_POLL_SECONDS)
+    raise MetaError("container não ficou pronto a tempo")
+
+
 async def publicar(ig_user_id: str, token: str, media_url: str, legenda: str, formato: str = "feed") -> str:
     async with httpx.AsyncClient(timeout=60) as c:
         cont = await _graph(c, "POST", f"{ig_user_id}/media", token, **_params_midia(media_url, legenda, formato))
-        cid = cont["id"]
-        tentativas = C.IG_POLL_TRIES * (10 if media_url.lower().endswith('.mp4') else 1)  # vídeo demora mais
-        for _ in range(tentativas):
-            st = (await _graph(c, "GET", cid, token, fields="status_code")).get("status_code")
-            if st == "FINISHED":
-                break
-            if st in ("ERROR", "EXPIRED"):
-                raise MetaError(f"container em {st}")
-            await asyncio.sleep(C.IG_POLL_SECONDS)
-        else:
-            raise MetaError("container não ficou pronto a tempo")
-        pub = await _graph(c, "POST", f"{ig_user_id}/media_publish", token, creation_id=cid)
+        await _esperar(c, cont["id"], token, media_url.lower().endswith(".mp4"))
+        pub = await _graph(c, "POST", f"{ig_user_id}/media_publish", token, creation_id=cont["id"])
+    return pub["id"]
+
+
+async def publicar_carrossel(ig_user_id: str, token: str, urls: list[str], legenda: str) -> str:
+    """Carrossel: um container por imagem (is_carousel_item) + um container CAROUSEL com os filhos. 2 a 10 imagens."""
+    if not 2 <= len(urls) <= 10:
+        raise MetaError("carrossel precisa de 2 a 10 imagens")
+    async with httpx.AsyncClient(timeout=60) as c:
+        filhos = []
+        for u in urls:
+            filhos.append((await _graph(c, "POST", f"{ig_user_id}/media", token, image_url=u, is_carousel_item="true"))["id"])
+        for f in filhos:
+            await _esperar(c, f, token)
+        cont = await _graph(c, "POST", f"{ig_user_id}/media", token, media_type="CAROUSEL", children=",".join(filhos), caption=legenda)
+        await _esperar(c, cont["id"], token)
+        pub = await _graph(c, "POST", f"{ig_user_id}/media_publish", token, creation_id=cont["id"])
     return pub["id"]
 
 

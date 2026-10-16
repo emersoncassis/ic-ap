@@ -17,7 +17,8 @@
     <div>
       <span class="badge {{ p.estado }}">{{ p.estado.replace('_',' ') }}</span> <small>#{{ p.id }} · {{ p.fonte }}</small>
       <h2 style="margin:8px 0 2px">{{ p.manchete or p.noticia_titulo }}</h2>
-      <small><a href="{{ p.noticia_url }}" target="_blank" rel="noopener">{{ p.noticia_url }}</a></small>
+      {% if p.formato == 'carrossel' %}<small class="mut">carrossel · {{ (p.arquivos | from_json | length) if p.arquivos else 1 }} slides</small>{% endif %}
+      {% if p.noticia_url %}<small><a href="{{ p.noticia_url }}" target="_blank" rel="noopener">{{ p.noticia_url }}</a></small>{% endif %}
       {% if p.erro %}<p class="err">{{ p.erro }}</p>{% endif %}
       {% if p.estado in ('aguardando_aprovacao','falhou') %}
       <form method="post" action="/posts/{{ p.id }}/legenda">
@@ -25,6 +26,8 @@
         <label>Legenda</label><textarea name="legenda">{{ p.legenda or '' }}</textarea>
         <div class="acts"><button class="sec" type="submit">Salvar legenda</button></div>
       </form>
+      <form method="post" action="/posts/{{ p.id }}/hashtags" style="margin-top:6px"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="sec" type="submit">Novas hashtags</button></form>
       <div class="acts">
         {% for a, rot, cls in [('aprovar','Postar agora',''),('refazer','Refazer','sec'),('descartar','Descartar','bad')] %}
         <form method="post" action="/posts/{{ p.id }}/{{ a }}"><input type="hidden" name="csrf" value="{{ csrf }}">

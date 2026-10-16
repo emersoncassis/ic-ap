@@ -97,12 +97,27 @@ async def listar_modelos(tipo: str, base_url: str, key: str) -> tuple[list[str],
 
 
 # ---------- chamada ao modelo ----------
-async def _chat(con: dict, system: str, user: str, temperature: float, schema: dict | None = None) -> str:
+def _alternar(msgs: list[dict]) -> list[dict]:
+    """Junta turnos seguidos do mesmo papel e garante que começa por 'user' (exigência de Gemini e Anthropic)."""
+    out: list[dict] = []
+    for m in msgs:
+        if out and out[-1]["role"] == m["role"]:
+            out[-1] = {"role": m["role"], "content": out[-1]["content"] + "\n\n" + m["content"]}
+        else:
+            out.append(dict(m))
+    while out and out[0]["role"] != "user":
+        out.pop(0)
+    return out
+
+
+async def _chat(con: dict, system: str, user: str, temperature: float, schema: dict | None = None,
+                historico: list[dict] | None = None) -> str:
     schema = schema or SCHEMA
     tipo, modelo, base, key = con["tipo"], con["modelo"], con["base_url"].rstrip("/"), con.get("api_key", "")
     if not modelo:
         raise LLMError("a conexão não tem modelo escolhido")
-    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    turnos = _alternar([*(historico or []), {"role": "user", "content": user}])
+    msgs = [{"role": "system", "content": system}, *turnos]
     async with httpx.AsyncClient(timeout=300) as c:
         try:
             if tipo == "openai":
@@ -123,14 +138,14 @@ async def _chat(con: dict, system: str, user: str, temperature: float, schema: d
             if tipo == "gemini":
                 r = await c.post(f"{C.GEMINI_API_BASE}/models/{modelo}:generateContent", headers={"x-goog-api-key": key}, json={
                     "systemInstruction": {"parts": [{"text": system}]},
-                    "contents": [{"role": "user", "parts": [{"text": user}]}],
+                    "contents": [{"role": "user" if t["role"] == "user" else "model", "parts": [{"text": t["content"]}]} for t in turnos],
                     "generationConfig": {"temperature": temperature, "responseMimeType": "application/json"}})
                 r.raise_for_status()
                 return r.json()["candidates"][0]["content"]["parts"][0]["text"]
             if tipo == "anthropic":
                 r = await c.post(f"{C.ANTHROPIC_API_BASE}/messages", headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, json={
-                    "model": modelo, "max_tokens": 1500, "temperature": min(temperature, 1.0), "system": system,
-                    "messages": [{"role": "user", "content": user}]})
+                    "model": modelo, "max_tokens": 3000, "temperature": min(temperature, 1.0), "system": system,
+                    "messages": turnos})
                 r.raise_for_status()
                 return r.json()["content"][0]["text"]
         except LLMError:
@@ -233,3 +248,201 @@ async def legenda_midia(con: dict, contexto: str, descricao: str, tipo: str, tem
         except ValueError as e:
             ultimo = str(e)
     raise ValueError(f"o modelo não entregou uma legenda válida ({ultimo})")
+
+
+# ---------------- texto -> post, carrossel, hashtags ----------------
+ESTRATEGIAS_AB = [
+    "manchete em forma de pergunta; chamada para ação pedindo que comentem",
+    "manchete com número ou lista curta; chamada para ação pedindo que salvem o post",
+    "manchete provocativa e contraintuitiva; chamada para ação pedindo que compartilhem",
+    "manchete com o benefício direto para o leitor; chamada para ação pedindo que sigam o perfil",
+]
+_STR = {"type": "string"}
+_TAGS = {"type": "array", "items": _STR}
+SCHEMA_POST = {"type": "object", "properties": {
+    "manchete_curta": _STR, "texto_card": _STR, "legenda_instagram": _STR, "cta": _STR, "hashtags": _TAGS},
+    "required": ["manchete_curta", "texto_card", "legenda_instagram", "cta", "hashtags"]}
+SCHEMA_CARROSSEL = {"type": "object", "properties": {
+    "slides": {"type": "array", "items": {"type": "object", "properties": {"titulo": _STR, "texto": _STR}, "required": ["titulo", "texto"]}},
+    "legenda_instagram": _STR, "cta": _STR, "hashtags": _TAGS},
+    "required": ["slides", "legenda_instagram", "cta", "hashtags"]}
+SCHEMA_HASHTAGS = {"type": "object", "properties": {"hashtags": _TAGS}, "required": ["hashtags"]}
+
+_REGRA_HASHTAGS = ("hashtags: 8 a 10, em português do Brasil, sem espaços e sem repetir: 3 de nicho (específicas, pouco disputadas), "
+                   "3 de alcance médio e 2 a 4 amplas.")
+INSTR_POST = f"""
+Você escreve um post de Instagram (imagem com texto + legenda) a partir de uma ideia do autor, na voz dele (descrita acima).
+Use SOMENTE o que a ideia traz e o que o perfil acima diz sobre o autor; não invente fatos, números ou histórias.
+Responda SOMENTE com JSON:
+- manchete_curta: até 10 palavras, vai em destaque no card.
+- texto_card: 2 parágrafos curtos, primeira pessoa, até 450 caracteres no total.
+- legenda_instagram: legenda completa SEM hashtags, até 1500 caracteres, terminando com a chamada para ação.
+- cta: a chamada para ação usada no fim da legenda (uma frase).
+- {_REGRA_HASHTAGS}
+Português do Brasil.
+""".strip()
+INSTR_CARROSSEL = f"""
+Você monta um carrossel de Instagram (vários slides de imagem com texto + legenda) a partir de uma ideia do autor, na voz dele (descrita acima).
+Use SOMENTE o que a ideia traz e o que o perfil acima diz sobre o autor; não invente fatos, números ou histórias.
+Responda SOMENTE com JSON:
+- slides: lista com EXATAMENTE {{n}} slides. O 1º é a capa (titulo forte de até 10 palavras; texto = subtítulo curto de até 80 caracteres, pode ficar vazio).
+  Do 2º ao penúltimo, cada slide desenvolve UMA ideia (titulo de até 8 palavras; texto de até 220 caracteres).
+  O último fecha com a chamada para ação (titulo de até 8 palavras; texto de até 160 caracteres).
+- legenda_instagram: legenda completa SEM hashtags, até 1200 caracteres, terminando com a chamada para ação.
+- cta: a chamada para ação usada.
+- {_REGRA_HASHTAGS}
+Português do Brasil.
+""".strip()
+
+
+def normalizar_hashtags(tags) -> list[str]:
+    out: list[str] = []
+    for t in tags if isinstance(tags, list) else []:
+        t = "#" + re.sub(r"[^\w]", "", str(t).replace("#", ""), flags=re.U)
+        if len(t) > 1 and t.lower() not in [o.lower() for o in out]:
+            out.append(t)
+    return out[:10]
+
+
+def montar_legenda(legenda: str, cta: str, tags: list[str]) -> str:
+    leg = legenda.strip()
+    if cta.strip() and cta.strip().lower()[:30] not in leg.lower():
+        leg += "\n\n" + cta.strip()
+    return leg + ("\n\n" + " ".join(tags) if tags else "")
+
+
+def _estrategia(estrategia: str | None) -> str:
+    return f"\n\nEstratégia desta versão: {estrategia}. Faça uma versão claramente diferente das outras versões da mesma ideia." if estrategia else ""
+
+
+def _feedback(feedback: str | None) -> str:
+    return f"\n\nA resposta anterior foi rejeitada: {feedback}. Corrija e responda de novo só com o JSON." if feedback else ""
+
+
+async def post_de_texto(con: dict, contexto: str, ideia: str, temperature: float = 0.8, estrategia: str | None = None,
+                        feedback: str | None = None) -> dict:
+    """ValueError = saída inválida (vale tentar de novo); LLMError = conexão."""
+    d = parse(await _chat(con, f"{contexto.strip()}\n\n---\n{INSTR_POST}", f"Ideia do autor:\n{ideia}{_estrategia(estrategia)}{_feedback(feedback)}",
+                          temperature, SCHEMA_POST))
+    for k in ("manchete_curta", "texto_card", "legenda_instagram", "cta"):
+        if not isinstance(d.get(k), str) or not d[k].strip():
+            raise ValueError(f"campo '{k}' ausente ou vazio")
+    if len(d["manchete_curta"].split()) > 10:
+        raise ValueError("manchete_curta com mais de 10 palavras")
+    if len(d["texto_card"]) > 600:
+        raise ValueError("texto_card com mais de 600 caracteres")
+    tags = normalizar_hashtags(d.get("hashtags"))
+    legenda = montar_legenda(d["legenda_instagram"], d["cta"], tags)
+    if len(legenda) > 2200:
+        raise ValueError("legenda com mais de 2200 caracteres")
+    return {"manchete_curta": d["manchete_curta"].strip(), "texto_card": d["texto_card"].strip(), "cta": d["cta"].strip(),
+            "hashtags": tags, "legenda": legenda}
+
+
+async def carrossel_de_texto(con: dict, contexto: str, ideia: str, n_slides: int = 6, temperature: float = 0.8,
+                             estrategia: str | None = None, feedback: str | None = None) -> dict:
+    n = max(3, min(int(n_slides), 10))
+    d = parse(await _chat(con, f"{contexto.strip()}\n\n---\n{INSTR_CARROSSEL.replace('{n}', str(n))}",
+                          f"Ideia do autor:\n{ideia}{_estrategia(estrategia)}{_feedback(feedback)}", temperature, SCHEMA_CARROSSEL))
+    slides = d.get("slides")
+    if not isinstance(slides, list) or len(slides) != n:
+        raise ValueError(f"o carrossel deve ter exatamente {n} slides")
+    out = []
+    for i, sl in enumerate(slides, 1):
+        titulo, texto = str((sl or {}).get("titulo", "")).strip(), str((sl or {}).get("texto", "")).strip()
+        if not titulo:
+            raise ValueError(f"slide {i} sem titulo")
+        if len(titulo.split()) > 12 or len(texto) > 320:
+            raise ValueError(f"slide {i} longo demais (titulo até 10 palavras, texto até 220 caracteres)")
+        out.append({"titulo": titulo, "texto": texto})
+    for k in ("legenda_instagram", "cta"):
+        if not isinstance(d.get(k), str) or not d[k].strip():
+            raise ValueError(f"campo '{k}' ausente ou vazio")
+    tags = normalizar_hashtags(d.get("hashtags"))
+    legenda = montar_legenda(d["legenda_instagram"], d["cta"], tags)
+    if len(legenda) > 2200:
+        raise ValueError("legenda com mais de 2200 caracteres")
+    return {"slides": out, "cta": d["cta"].strip(), "hashtags": tags, "legenda": legenda}
+
+
+async def hashtags_para(con: dict, contexto: str, texto: str, temperature: float = 0.7) -> list[str]:
+    system = (f"{contexto.strip()}\n\n---\nVocê sugere hashtags de Instagram para o texto do post abaixo, no nicho do autor. "
+              f"Responda SOMENTE com JSON: {{\"hashtags\": [...]}}. {_REGRA_HASHTAGS}")
+    ultimo = ""
+    for _ in range(3):
+        try:
+            tags = normalizar_hashtags(parse(await _chat(con, system, f"Texto do post:\n{texto}{_feedback(ultimo)}", temperature, SCHEMA_HASHTAGS)).get("hashtags"))
+            if len(tags) >= 3:
+                return tags
+            ultimo = "menos de 3 hashtags válidas"
+        except ValueError as e:
+            ultimo = str(e)
+    raise ValueError(f"o modelo não entregou hashtags válidas ({ultimo})")
+
+
+# ---------------- conversa de brainstorming (Telegram) ----------------
+SCHEMA_AGENTE = {"type": "object", "properties": {
+    "resposta": _STR, "acao": {"type": "string", "enum": ["conversar", "propor_perfil", "gerar"]},
+    "perfil_md": _STR, "palavras_chave": _STR, "horarios": _STR,
+    "gerar": {"type": "object", "properties": {
+        "formato": {"type": "string", "enum": ["feed", "story", "carrossel"]}, "ideia": _STR,
+        "n_slides": {"type": "integer"}, "variacoes": {"type": "integer"}},
+        "required": ["formato", "ideia", "n_slides", "variacoes"]}},
+    "required": ["resposta", "acao", "perfil_md", "palavras_chave", "horarios", "gerar"]}
+
+INSTR_AGENTE = """
+Você é o assistente de brainstorming e produção de conteúdo do Instagram do autor, conversando com ele pelo Telegram.
+Seu trabalho tem duas partes: (1) montar e manter o perfil dele (quem é, tom, temas, mindset de postagem) e (2) fazer brainstorming de pautas e gerar os posts.
+
+Como conversar:
+- Português do Brasil, informal e direto, respostas curtas (até 600 caracteres), UMA pergunta por vez.
+- Nunca invente fatos sobre o autor: use só o que ele disse aqui ou o que consta no perfil atual.
+- Se o perfil atual está vazio ou curto, conduza uma entrevista antes de qualquer coisa: quem ele é e o que faz, para quem fala (público),
+  tom de voz, temas que quer abordar e o que evita, no que acredita, objetivo com o Instagram, 3 a 5 textos reais dele (peça para colar),
+  chamada para ação e hashtags que costuma usar, frequência e horários de postagem.
+- Quando já houver informação suficiente (cerca de 5 respostas boas) ou quando ele pedir, use acao "propor_perfil": preencha perfil_md com o perfil
+  COMPLETO em markdown, na estrutura "# Quem eu sou / # Temas que comento / # No que eu acredito / # O que eu critico / # Tom de voz /
+  # Padrões que são meus / # Frases e jeitos que NUNCA uso / # Exemplos reais de textos meus / # Regras de saída", usando as palavras e os textos dele;
+  palavras_chave com os temas separados por vírgula (usadas para filtrar notícias); horarios no formato HH:MM separados por vírgula, se ele disse (senão vazio).
+  Em "resposta", resuma em poucas linhas e diga que ele confirma ou ajusta pelos botões. Ele NÃO salva nada sem confirmar.
+- Para revisar um perfil existente, parta do perfil atual e proponha só o que mudou, mas devolva o perfil_md completo.
+- Brainstorming: quando ele pedir ideias, proponha 3 a 5 ideias numeradas, cada uma com um ângulo em uma linha. Use os temas do perfil.
+- Gerar: quando ele escolher uma ideia ou pedir um post, use acao "gerar" com gerar.ideia = a ideia completa e autossuficiente (inclua o ângulo escolhido e os pontos
+  que ele deu), gerar.formato = feed, story ou carrossel (carrossel quando ele pedir carrossel/sequência/passo a passo; story quando pedir story),
+  gerar.n_slides = 5 a 8 para carrossel (0 nos demais), gerar.variacoes = 1 a 3 (mais de 1 só quando ele pedir versões ou teste A/B).
+  Em "resposta", diga em uma linha o que está gerando.
+- Em qualquer outra acao ("conversar"), deixe perfil_md, palavras_chave e horarios vazios e gerar.ideia vazia.
+
+Responda SOMENTE com JSON com os campos: resposta, acao, perfil_md, palavras_chave, horarios, gerar{formato, ideia, n_slides, variacoes}.
+""".strip()
+
+
+async def conversar(con: dict, perfil: dict, historico: list[dict], mensagem: str, temperature: float = 0.7) -> dict:
+    """Um turno da conversa. Devolve o dict normalizado: resposta, acao, perfil_md, palavras_chave, horarios, gerar."""
+    estado = (f"Perfil atual do autor (nome: {perfil.get('nome', '')}):\n"
+              f"{(perfil.get('contexto_md') or '').strip() or '(vazio: ainda não foi montado)'}\n\n"
+              f"Palavras-chave atuais: {perfil.get('palavras_chave') or '(nenhuma)'}\nHorários atuais: {perfil.get('horarios') or '(nenhum)'}")
+    ultimo = ""
+    for _ in range(3):
+        try:
+            raw = await _chat(con, f"{INSTR_AGENTE}\n\n=== ESTADO ===\n{estado}", mensagem + _feedback(ultimo), temperature,
+                              SCHEMA_AGENTE, historico)
+            d = parse(raw)
+            if not isinstance(d.get("resposta"), str) or not d["resposta"].strip():
+                raise ValueError("campo 'resposta' ausente ou vazio")
+            acao = d.get("acao") if d.get("acao") in ("conversar", "propor_perfil", "gerar") else "conversar"
+            g = d.get("gerar") if isinstance(d.get("gerar"), dict) else {}
+            fmt = g.get("formato") if g.get("formato") in ("feed", "story", "carrossel") else "feed"
+            ideia = str(g.get("ideia") or "").strip()
+            perfil_md = str(d.get("perfil_md") or "").strip()
+            if acao == "gerar" and len(ideia) < 8:
+                raise ValueError("acao gerar sem gerar.ideia")
+            if acao == "propor_perfil" and len(perfil_md) < 80:
+                raise ValueError("acao propor_perfil sem perfil_md completo")
+            return {"resposta": d["resposta"].strip(), "acao": acao, "perfil_md": perfil_md,
+                    "palavras_chave": str(d.get("palavras_chave") or "").strip(), "horarios": str(d.get("horarios") or "").strip(),
+                    "gerar": {"formato": fmt, "ideia": ideia, "n_slides": max(3, min(int(g.get("n_slides") or 6), 10)),
+                              "variacoes": max(1, min(int(g.get("variacoes") or 1), len(ESTRATEGIAS_AB)))}}
+        except (ValueError, TypeError) as e:
+            ultimo = str(e)
+    raise ValueError(f"o modelo não respondeu no formato esperado ({ultimo})")

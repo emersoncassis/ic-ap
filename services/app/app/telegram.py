@@ -37,6 +37,40 @@ async def enviar_card(chat_id: str, arquivo, post_id: int, legenda: str, aviso: 
     return str(res["message_id"])
 
 
+_TECLADO = lambda post_id: {"inline_keyboard": [[
+    {"text": "✅ Postar", "callback_data": f"ap:{post_id}"},
+    {"text": "🔄 Refazer", "callback_data": f"rf:{post_id}"},
+    {"text": "🗑 Descartar", "callback_data": f"ds:{post_id}"}]]}
+
+
+async def enviar_carrossel(chat_id: str, arquivos: list, post_id: int, legenda: str, aviso: str = "") -> str:
+    """Álbum com os slides + uma mensagem com a legenda e os botões. Devolve o id da mensagem com os botões."""
+    abertos = {f"f{i}": open(a, "rb") for i, a in enumerate(arquivos[:10])}
+    try:
+        await _call("sendMediaGroup", data={"chat_id": chat_id, "media": json.dumps(
+            [{"type": "photo", "media": f"attach://{k}"} for k in abertos])}, files=abertos)
+    finally:
+        for f in abertos.values():
+            f.close()
+    cab = (f"{aviso}\n\n" if aviso else "") + f"Carrossel de {len(abertos)} slides\n\n"
+    res = await _call("sendMessage", data={"chat_id": chat_id, "text": (cab + legenda)[:4000],
+                                           "reply_markup": json.dumps(_TECLADO(post_id))})
+    return str(res["message_id"])
+
+
+async def enviar_botoes(chat_id: str, texto: str, linhas: list[list[tuple[str, str]]]) -> str:
+    teclado = {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in linha] for linha in linhas]}
+    res = await _call("sendMessage", data={"chat_id": chat_id, "text": texto[:4000], "reply_markup": json.dumps(teclado)})
+    return str(res["message_id"])
+
+
+async def digitando(chat_id: str) -> None:
+    try:
+        await _call("sendChatAction", data={"chat_id": chat_id, "action": "typing"})
+    except Exception:
+        pass
+
+
 MAX_DOWNLOAD = 20 * 1024 * 1024  # limite do getFile na API padrão de bots
 
 

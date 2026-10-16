@@ -21,5 +21,5 @@
   <h1>{{ manchete }}</h1>
   <div class="rule"></div>
   <div class="body">{% for p in paragrafos %}<p>{{ p }}</p>{% endfor %}</div>
-  <div class="foot"><span>Fonte: {{ fonte }}</span><span>{{ handle }}</span></div>
+  <div class="foot"><span>{% if fonte %}Fonte: {{ fonte }}{% endif %}</span><span>{{ handle }}</span></div>
 </div></body></html>

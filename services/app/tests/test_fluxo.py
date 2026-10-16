@@ -581,9 +581,9 @@ def test_telegram_midia_so_do_dono_texto_e_limite(logado, fake):
     n = _n_midia()
     fake.push_msg(999, "foto", "intruso")
     fake.push_msg(42, "foto", "grande demais", size=25 * 1024 * 1024)
-    fake.push_msg(42, "texto", "oi")
+    fake.push_msg(42, "texto", "/ajuda")
     esperar(lambda: any(m == "sendMessage" and "20 MB" in d["text"] for m, d in fake.st()["tg"]))
-    esperar(lambda: any(m == "sendMessage" and "Mande uma foto" in d["text"] for m, d in fake.st()["tg"]))
+    esperar(lambda: any(m == "sendMessage" and "Converse comigo" in d["text"] for m, d in fake.st()["tg"]))
     assert _n_midia() == n and not any(d.get("chat_id") == "999" for m, d in fake.st()["tg"])
 
 
@@ -601,3 +601,143 @@ def test_id_de_pagina_no_lugar_do_instagram_explica_o_erro(logado):
     html = ver(logado, "/conexoes")
     assert "não é o de uma conta do Instagram" in html and "assistente" in html
     db.x("UPDATE perfis SET ig_user_id=? WHERE id=1", (antigo,))
+
+
+
+# ---------------- brainstorming pelo Telegram: ideia -> post, carrossel, A/B, hashtags, perfil ----------------
+def _gerar_cmd(formato, ideia="Dado privado na empresa: por que a IA precisa respeitar isso", n=0, v=1):
+    return {"resposta": "Gerando agora.", "acao": "gerar", "gerar": {"formato": formato, "ideia": ideia, "n_slides": n, "variacoes": v}}
+
+
+def _n_texto():
+    return len(db.q("SELECT 1 FROM posts WHERE fonte='Texto'"))
+
+
+def _novos_texto(antes, quantos=1):
+    return esperar(lambda: (lambda r: list(reversed(r[:quantos])) if len(r) >= antes + quantos and all(
+        x["estado"] != "capturado" for x in r[:quantos]) else None)(db.q("SELECT * FROM posts WHERE fonte='Texto' ORDER BY id DESC")))
+
+
+def _dizer(fake, texto):
+    n = len([1 for m, d in fake.st()["tg"] if m == "sendMessage"])
+    fake.push_msg(42, "texto", texto)
+    return n
+
+
+def test_ideia_na_conversa_vira_post_de_feed_com_hashtags(logado, fake):
+    configurar_perfil(logado)
+    n = _n_texto()
+    fake.set(agente=[_gerar_cmd("feed")])
+    _dizer(fake, "faz um post sobre dado privado na empresa")
+    [p] = _novos_texto(n)
+    assert p["formato"] == "feed" and p["estado"] == "aguardando_aprovacao" and p["noticia_url"] is None
+    assert jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350)
+    assert p["manchete"].startswith("Dado na mão") and "Fonte:" not in p["reacao"]
+    # legenda: texto + chamada para ação + hashtags normalizadas, sem repetir
+    assert p["legenda"].endswith("#ia #empresas #dados #privacidade #tecnologia #gestao #ysafe #startup") and "Comente o que você acha." in p["legenda"]
+    esperar(lambda: any(m == "sendPhoto" and d["chat_id"] == "42" and "Minha ideia de hoje" in d["caption"] for m, d in fake.st()["tg"]))
+    assert any(m == "sendMessage" and "Gerando agora" in d["text"] for m, d in fake.st()["tg"])
+    # hashtags novas trocam só o bloco final
+    post_form(logado, f"/posts/{p['id']}/hashtags")
+    novo = pipeline.post(p["id"])
+    assert novo["legenda"].endswith("#novatag1 #novatag2 #novatag3 #novatag4") and "#ia " not in novo["legenda"] and "Comente o que você acha." in novo["legenda"]
+    # salvar legenda pelo painel (a rota estava escondida pela rota genérica)
+    post_form(logado, f"/posts/{p['id']}/legenda", legenda="Legenda editada à mão")
+    assert pipeline.post(p["id"])["legenda"] == "Legenda editada à mão"
+    post_form(logado, f"/posts/{p['id']}/aprovar")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
+    media = next(d for t, d in fake.st()["graph"] if t == "media")
+    assert media["image_url"].endswith(p["arquivo"]) and media["caption"] == "Legenda editada à mão"
+
+
+def test_carrossel_na_conversa_vai_ao_instagram_como_carrossel(logado, fake):
+    n = _n_texto()
+    fake.set(agente=[_gerar_cmd("carrossel", n=5)])
+    _dizer(fake, "monta um carrossel de 5 slides")
+    [p] = _novos_texto(n)
+    import json
+    arqs = json.loads(p["arquivos"])
+    assert p["formato"] == "carrossel" and len(arqs) == 5 and p["arquivo"] == arqs[0]
+    assert all(jpeg_dims(C.CARDS / a) == (1080, 1350) for a in arqs) and len(set(arqs)) == 5
+    esperar(lambda: any(m == "sendMediaGroup" for m, d in fake.st()["tg"]))
+    esperar(lambda: any(m == "sendMessage" and "Carrossel de 5 slides" in d["text"] and "ap:" in d["reply_markup"] for m, d in fake.st()["tg"]))
+    # aprovar pelo botão do Telegram: 5 itens + 1 contêiner CAROUSEL + publish
+    fake.push(f"ap:{p['id']}", "42")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
+    g = fake.st()["graph"]
+    itens = [d for t, d in g if t == "media" and d.get("is_carousel_item") == "true"]
+    cont = [d for t, d in g if t == "media" and d.get("media_type") == "CAROUSEL"]
+    assert len(itens) == 5 and all(d["image_url"].split("/")[-1] in arqs for d in itens) and "caption" not in itens[0]
+    assert len(cont) == 1 and cont[0]["children"].count("ITEM") == 5 and cont[0]["caption"] == p["legenda"]
+    assert [t for t, _ in g].count("publish") == 1
+    assert not any((C.PUBLIC / a).exists() for a in arqs), "as imagens só ficam públicas durante o publish"
+
+
+def test_carrossel_com_slide_longo_demais_e_refeito(logado, fake):
+    n = _n_texto()
+    fake.set(agente=[_gerar_cmd("carrossel", n=4)], carrossel_modo="estoura")
+    _dizer(fake, "carrossel de 4 slides")
+    [p] = _novos_texto(n)
+    assert p["estado"] == "aguardando_aprovacao" and len(__import__("json").loads(p["arquivos"])) == 4
+    assert "longo demais" in fake.st()["llm_users"][-1], "o modelo recebeu o motivo da recusa e encurtou"
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "descartado")
+    assert not any((C.CARDS / a).exists() for a in __import__("json").loads(p["arquivos"])), "descartar apaga todos os slides"
+
+
+def test_versoes_ab_tem_manchetes_e_chamadas_diferentes(logado, fake):
+    n = _n_texto()
+    fake.set(agente=[_gerar_cmd("feed", v=3)])
+    _dizer(fake, "faz 3 versões para testar")
+    ps = _novos_texto(n, 3)
+    assert len({p["grupo"] for p in ps}) == 1 and [p["variacao"] for p in ps] == [1, 2, 3]
+    assert len({p["manchete"] for p in ps}) == 3 and len({p["angulo"] for p in ps}) == 3
+    esperar(lambda: sum(1 for m, d in fake.st()["tg"] if m == "sendPhoto" and "Versão" in d["caption"]) == 3)
+    for p in ps:
+        post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_perfil_montado_na_conversa_so_salva_com_confirmacao(logado, fake):
+    configurar_perfil(logado)
+    original = db.one("SELECT contexto_md, palavras_chave, horarios FROM perfis WHERE id=1")
+    # entrevista: o bot pergunta; o histórico vai junto na próxima rodada
+    _dizer(fake, "/perfil")
+    esperar(lambda: any(m == "sendMessage" and "Quem é você" in d["text"] for m, d in fake.st()["tg"]))
+    perfil_novo = "# Quem eu sou\nConsultor de IA para donos de empresa. " * 3 + "\n# Tom de voz\nDireto, em primeira pessoa."
+    fake.set(agente=[{"resposta": "Montei. Confirme pelos botões.", "acao": "propor_perfil", "perfil_md": perfil_novo,
+                      "palavras_chave": "IA, saúde digital", "horarios": "08:00,19:30,25:99"}])
+    _dizer(fake, "sou consultor de IA, falo com donos de empresa, tom direto")
+    esperar(lambda: any(m == "sendMessage" and "Proposta de perfil" in d["text"] and "sp:1" in d["reply_markup"] for m, d in fake.st()["tg"]))
+    assert fake.st()["llm_turnos"][-1] >= 3, "a conversa anterior foi enviada ao modelo"
+    assert db.one("SELECT contexto_md FROM perfis WHERE id=1")["contexto_md"] == original["contexto_md"], "nada muda sem confirmar"
+    fake.push("sp:1", "999")  # outra pessoa não confirma
+    fake.push("sp:1", "42")
+    esperar(lambda: db.one("SELECT contexto_md FROM perfis WHERE id=1")["contexto_md"] == perfil_novo)
+    p = db.one("SELECT * FROM perfis WHERE id=1")
+    assert p["palavras_chave"] == "IA, saúde digital" and p["horarios"] == "08:00,19:30", "horário inválido descartado"
+    esperar(lambda: any(m == "sendMessage" and "Perfil salvo" in d["text"] for m, d in fake.st()["tg"]))
+    assert not db.get_setting("propostaperfil:1")
+    # ajustar: descarta a proposta sem tocar no perfil
+    fake.set(agente=[{"resposta": "Outra versão.", "acao": "propor_perfil", "perfil_md": perfil_novo + "\n# Extra\nmais coisa " * 5}])
+    _dizer(fake, "muda o tom")
+    esperar(lambda: db.get_setting("propostaperfil:1"))
+    fake.push("np:1", "42")
+    esperar(lambda: not db.get_setting("propostaperfil:1"))
+    assert db.one("SELECT contexto_md FROM perfis WHERE id=1")["contexto_md"] == perfil_novo
+    # /novo zera a conversa
+    _dizer(fake, "/novo")
+    esperar(lambda: not db.q("SELECT 1 FROM conversas WHERE chat_id='42'"))
+    db.x("UPDATE perfis SET contexto_md=?, palavras_chave=?, horarios=? WHERE id=1",
+         (original["contexto_md"], original["palavras_chave"], original["horarios"]))
+
+
+def test_conversa_sem_llm_ou_de_estranho_nao_gera_nada(logado, fake):
+    n = _n_texto()
+    fake.set(agente=[_gerar_cmd("feed")])
+    fake.push_msg(999, "texto", "faz um post")
+    _dizer(fake, "/start")
+    esperar(lambda: fake.st()["agente"] == [])  # só o /start do dono consumiu a resposta
+    assert not any(d.get("chat_id") == "999" for m, d in fake.st()["tg"])
+    _novos_texto(n)
+    for p in db.q("SELECT id FROM posts WHERE fonte='Texto' AND estado='aguardando_aprovacao'"):
+        post_form(logado, f"/posts/{p['id']}/descartar")

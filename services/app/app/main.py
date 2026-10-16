@@ -14,6 +14,7 @@ from .tunnel import tunel
 
 WEB = Path(__file__).parent / "web"
 templates = Jinja2Templates(directory=str(WEB / "templates"))
+templates.env.filters["from_json"] = lambda v: json.loads(v) if v else []
 _tasks: list[asyncio.Task] = []
 _falhas: dict[str, list[float]] = {}
 
@@ -265,6 +266,25 @@ async def desagendar(request: Request, post_id: int):
     return voltar(request, "/agenda")
 
 
+@app.post("/posts/{post_id}/legenda")
+async def editar_legenda(request: Request, post_id: int):
+    logado(request)
+    f = await form(request)
+    db.x("UPDATE posts SET legenda=?, atualizado_em=? WHERE id=? AND estado IN ('aguardando_aprovacao','falhou')",
+         (f.get("legenda", "")[:2200], db.now(), post_id))
+    flash(request, "Legenda salva.")
+    return voltar(request)
+
+
+@app.post("/posts/{post_id}/hashtags")
+async def hashtags(request: Request, post_id: int):
+    logado(request)
+    await form(request)
+    flash(request, "Hashtags novas na legenda." if await pipeline.novas_hashtags(post_id) else "Não consegui gerar hashtags agora.",
+          "ok")
+    return voltar(request)
+
+
 @app.post("/posts/{post_id}/{acao}")
 async def acao_post(request: Request, post_id: int, acao: str):
     logado(request)
@@ -273,16 +293,6 @@ async def acao_post(request: Request, post_id: int, acao: str):
     if not fn:
         raise HTTPException(404)
     flash(request, f"{acao.capitalize()}: {'ok' if await fn(post_id) else 'não foi possível (veja o erro no post)'}")
-    return voltar(request)
-
-
-@app.post("/posts/{post_id}/legenda")
-async def editar_legenda(request: Request, post_id: int):
-    logado(request)
-    f = await form(request)
-    db.x("UPDATE posts SET legenda=?, atualizado_em=? WHERE id=? AND estado IN ('aguardando_aprovacao','falhou')",
-         (f.get("legenda", "")[:2200], db.now(), post_id))
-    flash(request, "Legenda salva.")
     return voltar(request)
 
 
