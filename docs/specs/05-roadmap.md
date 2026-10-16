@@ -28,14 +28,14 @@ Carrossel; imagem de fundo com ComfyUI; Reels; métricas de alcance.
 
 ## Decisões já tomadas
 
-- Hardware: RTX 5070 + Core Ultra 7 (VRAM a confirmar, assumido 8 GB). LLM local ~7–8B, com provedor de nuvem configurável como reserva.
-- Perfil: pessoal. Contexto vem do site pessoal.
+- Hardware: RTX 5070 8 GB de VRAM + Core Ultra 7. LLM local ~7–8B, com provedor de nuvem configurável como reserva.
+- Perfil: pessoal. Contexto vem do site pessoal (emerson.ysafe.com.br); rascunho em `context/meu_contexto.md`.
 - Credenciais Meta: app, ID da conta e token já existem.
 
 ## Perguntas em aberto
 
-1. URL do site pessoal (fonte do contexto).
-2. `nvidia-smi` mostra 8 GB ou 12 GB de VRAM? Quanta RAM?
+1. Quanta RAM tem o notebook?
+2. Colar 3 a 5 textos/legendas seus para o contexto.
 3. O app Meta usa Instagram Login ou Facebook Login? O token é curto ou longo?
 4. URL pública: R2 ou Cloudflare Tunnel?
 5. Quais temas e feeds RSS de notícias?

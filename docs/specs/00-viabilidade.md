@@ -34,7 +34,7 @@ A Meta busca a imagem por URL no momento do publish. Opções, da mais simples �
 
 ## Hardware
 
-Informado: RTX 5070 + Intel Core Ultra 7. A RTX 5070 de notebook tem 8 GB de VRAM (a de desktop tem 12 GB). **Assumindo 8 GB até confirmar com `nvidia-smi`.** Referência aproximada para modelos quantizados (Q4):
+Informado: RTX 5070 + Intel Core Ultra 7. **VRAM confirmada: 8 GB** (RTX 5070 de notebook). Referência aproximada para modelos quantizados (Q4):
 
 | VRAM | O que roda bem |
 |---|---|
