@@ -23,6 +23,7 @@ button.sec{background:transparent;color:var(--fg);border:1px solid var(--line)}b
 .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.acts form{margin:0}
 .badge{font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
 .badge.aguardando_aprovacao{color:var(--warn);border-color:var(--warn)}.badge.publicado{color:var(--ok);border-color:var(--ok)}
+.badge.rascunho{color:var(--mut)}.badge.agendado{color:var(--ok);border-color:var(--ok)}
 .badge.falhou{color:var(--err);border-color:var(--err)}.badge.publicando,.badge.extraido,.badge.capturado{color:var(--acc);border-color:var(--acc)}
 .flash{padding:10px 14px;border-radius:10px;margin-bottom:12px;border:1px solid var(--line);background:var(--card)}
 .flash.erro{border-color:var(--err);color:var(--err)}.flash.aviso{border-color:var(--warn);color:var(--warn)}.flash.ok{border-color:var(--ok)}
@@ -35,6 +36,8 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 10px
   <span class="brand"><i></i>ic-ap</span>
   <nav>
     <a href="/" class="{{ 'on' if request.url.path=='/' }}">Fila</a>
+    <a href="/pauta" class="{{ 'on' if request.url.path=='/pauta' }}">Pauta</a>
+    <a href="/agenda" class="{{ 'on' if request.url.path=='/agenda' }}">Agenda</a>
     <a href="/perfis" class="{{ 'on' if request.url.path.startswith('/perfis') }}">Perfis</a>
     <a href="/feeds" class="{{ 'on' if request.url.path=='/feeds' }}">Feeds</a>
     <a href="/llm" class="{{ 'on' if request.url.path=='/llm' }}">LLM</a>

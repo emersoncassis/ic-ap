@@ -143,8 +143,10 @@ def montar_system(contexto: str) -> str:
     return f"{contexto.strip()}\n\n---\n{INSTRUCOES}"
 
 
-def montar_user(n: dict, feedback: str | None = None) -> str:
+def montar_user(n: dict, feedback: str | None = None, angulo: str | None = None) -> str:
     s = f"Notícia\nTítulo: {n['titulo']}\nFonte: {n['fonte']}\nLink: {n['url']}\n\nTexto:\n{n['texto']}"
+    if angulo:
+        s += f"\n\nÂngulo desta versão: {angulo}. Faça uma versão claramente diferente das outras versões da mesma notícia."
     if feedback:
         s += f"\n\nA resposta anterior foi rejeitada: {feedback}. Corrija e responda de novo só com o JSON."
     return s
@@ -183,9 +185,10 @@ def pos_processar(d: dict) -> dict:
     return d
 
 
-async def reagir(con: dict, contexto: str, noticia: dict, temperature: float = 0.7, feedback: str | None = None) -> dict:
+async def reagir(con: dict, contexto: str, noticia: dict, temperature: float = 0.7, feedback: str | None = None,
+                 angulo: str | None = None) -> dict:
     """Uma tentativa. ValueError = saída inválida (vale tentar de novo); LLMError = conexão/servidor."""
-    raw = await _chat(con, montar_system(contexto), montar_user(noticia, feedback), temperature)
+    raw = await _chat(con, montar_system(contexto), montar_user(noticia, feedback, angulo), temperature)
     d = parse(raw)
     erros = validar(d)
     if erros:

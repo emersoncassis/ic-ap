@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS perfis(
   id INTEGER PRIMARY KEY, nome TEXT NOT NULL, handle TEXT DEFAULT '', ativo INTEGER DEFAULT 1,
   ig_user_id TEXT DEFAULT '', ig_token_enc TEXT DEFAULT '', telegram_chat_id TEXT DEFAULT '',
   llm_conexao_id INTEGER, contexto_md TEXT DEFAULT '',
-  horarios TEXT DEFAULT '09:00,18:00', palavras_chave TEXT DEFAULT '', max_idade_horas INTEGER DEFAULT 36,
+  horarios TEXT DEFAULT '09:00,18:00', musica_modo TEXT NOT NULL DEFAULT 'nenhuma', palavras_chave TEXT DEFAULT '', max_idade_horas INTEGER DEFAULT 36,
   criado_em TEXT);
 CREATE TABLE IF NOT EXISTS feeds(
   id INTEGER PRIMARY KEY, perfil_id INTEGER, nome TEXT, url TEXT, tema TEXT DEFAULT '', ativo INTEGER DEFAULT 1);
@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS posts(
   id INTEGER PRIMARY KEY, perfil_id INTEGER NOT NULL, estado TEXT NOT NULL,
   noticia_url TEXT, noticia_titulo TEXT, fonte TEXT, texto TEXT, json_llm TEXT, manchete TEXT, reacao TEXT,
   legenda TEXT, arquivo TEXT, media_id TEXT, erro TEXT, tg_message_id TEXT, criado_em TEXT, atualizado_em TEXT,
-  UNIQUE(perfil_id, noticia_url));
+  variacao INTEGER NOT NULL DEFAULT 1, grupo INTEGER, agendado_para TEXT, formato TEXT NOT NULL DEFAULT 'feed',
+  angulo TEXT DEFAULT '',
+  UNIQUE(perfil_id, noticia_url, variacao));
 CREATE TABLE IF NOT EXISTS eventos(
   id INTEGER PRIMARY KEY, perfil_id INTEGER, post_id INTEGER, tipo TEXT, detalhe TEXT, criado_em TEXT);
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
@@ -43,7 +45,24 @@ def init() -> None:
     _conn.row_factory = sqlite3.Row
     with _lock:
         _conn.executescript(SCHEMA)
+        _migrar()
         _conn.commit()
+
+
+def _colunas(tabela: str) -> set[str]:
+    return {r["name"] for r in _conn.execute(f"PRAGMA table_info({tabela})").fetchall()}
+
+
+def _migrar() -> None:
+    """Bancos criados por versões anteriores: recria posts (nova UNIQUE com variação) e adiciona colunas."""
+    if "musica_modo" not in _colunas("perfis"):
+        _conn.execute("ALTER TABLE perfis ADD COLUMN musica_modo TEXT NOT NULL DEFAULT 'nenhuma'")
+    if "variacao" not in _colunas("posts"):
+        antigas = ",".join(sorted(_colunas("posts")))
+        _conn.executescript("ALTER TABLE posts RENAME TO posts_old;")
+        _conn.executescript(SCHEMA)  # recria posts com o esquema novo
+        _conn.execute(f"INSERT INTO posts({antigas}) SELECT {antigas} FROM posts_old")
+        _conn.execute("DROP TABLE posts_old")
 
 
 def q(sql: str, args: tuple = ()) -> list[dict]:

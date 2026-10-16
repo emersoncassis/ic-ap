@@ -1,10 +1,17 @@
 """Fluxo de um post: capturar -> extrair -> reagir -> renderizar -> aprovar -> publicar."""
-import json, re, shutil, sqlite3
+import asyncio, json, re, shutil, sqlite3
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from . import config as C, crypto, db, feeds, ig, llm, render, settings, telegram
 
 RUNNING: set[int] = set()
 MAX_FALHAS = 3
+ESTADOS_ABERTOS = ("aguardando_aprovacao", "rascunho", "agendado", "falhou")
+ANGULOS = ["opinião direta e provocativa, no formato 'Não é X, é Y'",
+           "explicação simples para quem não é da área, com um exemplo do dia a dia",
+           "impacto prático para empresários e gestores",
+           "pergunta que provoque debate nos comentários"]
 
 
 def perfil(pid: int) -> dict | None:
@@ -41,7 +48,7 @@ def _claim(post_id: int, de: tuple, para: str) -> bool:
 
 def _apagar(*nomes) -> None:
     for n in nomes:
-        if n and re.fullmatch(r"[0-9a-f]{32}\.jpg", n):
+        if n and re.fullmatch(r"[0-9a-f]{32}\.(jpg|mp4)", n):
             (C.CARDS / n).unlink(missing_ok=True)
 
 
@@ -78,8 +85,10 @@ async def gerar(perfil_id: int, n: int = 1, origem: str = "manual") -> int:
         RUNNING.discard(perfil_id)
 
 
-async def _processar(post_id: int, p: dict, temperature: float) -> bool:
+async def _processar(post_id: int, p: dict, temperature: float, destino: str = "aguardando_aprovacao",
+                     com_print: bool = False) -> bool:
     po = post(post_id)
+    formato = po["formato"] or "feed"
     try:
         if not po["texto"]:
             ex = await feeds.extrair(po["noticia_url"])
@@ -92,12 +101,13 @@ async def _processar(post_id: int, p: dict, temperature: float) -> bool:
         feedback, res, arquivo = None, None, None
         for tentativa in range(3):
             try:
-                res = await llm.reagir(con, p["contexto_md"], noticia, temperature, feedback)
+                res = await llm.reagir(con, p["contexto_md"], noticia, temperature, feedback, po["angulo"] or None)
             except ValueError as e:
                 feedback = str(e)
                 continue
+            print_uri = await render.print_pagina(po["noticia_url"]) if (com_print and formato == "story") else None
             arquivo, estourou = await render.card(res["manchete_curta"], res["minha_reacao"], po["fonte"] or res["fonte"],
-                                                  p["handle"], p["nome"])
+                                                  p["handle"], p["nome"], formato, print_uri)
             if estourou:
                 _apagar(arquivo)
                 feedback, arquivo = "minha_reacao não coube no card, encurte", None
@@ -105,10 +115,10 @@ async def _processar(post_id: int, p: dict, temperature: float) -> bool:
             break
         if not arquivo:
             raise ValueError(f"o modelo não entregou uma saída válida em 3 tentativas ({feedback})")
-        _set(post_id, "aguardando_aprovacao", json_llm=json.dumps(res, ensure_ascii=False), manchete=res["manchete_curta"],
+        _set(post_id, destino, json_llm=json.dumps(res, ensure_ascii=False), manchete=res["manchete_curta"],
              reacao=res["minha_reacao"], legenda=res["legenda_instagram"], arquivo=arquivo, erro=None)
         db.log(p["id"], post_id, "gerado", f"confianca={res['confianca']}")
-        if telegram.ativo() and p["telegram_chat_id"]:
+        if destino == "aguardando_aprovacao" and telegram.ativo() and p["telegram_chat_id"]:
             try:
                 aviso = "⚠️ Confiança baixa: confira o fato antes de postar." if res["confianca"] == "baixa" else ""
                 mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / arquivo, post_id, res["legenda_instagram"], aviso)
@@ -120,18 +130,19 @@ async def _processar(post_id: int, p: dict, temperature: float) -> bool:
         msg = (str(e) or type(e).__name__)[:400]
         _set(post_id, "falhou", erro=msg)
         db.log(p["id"], post_id, "falhou", msg)
-        if telegram.ativo() and p["telegram_chat_id"]:
+        if destino == "aguardando_aprovacao" and telegram.ativo() and p["telegram_chat_id"]:
             await telegram.avisar(p["telegram_chat_id"], f"Falha ao gerar post #{post_id}: {msg[:200]}")
         return False
 
 
 async def refazer(post_id: int) -> bool:
     po = post(post_id)
-    if not po or not _claim(post_id, ("aguardando_aprovacao", "falhou"), "extraido"):
+    if not po or not _claim(post_id, ESTADOS_ABERTOS, "extraido"):
         return False
     old = po["arquivo"]
     p = perfil(po["perfil_id"])
-    ok = await _processar(post_id, p, temperature=0.95)
+    destino = "rascunho" if po["estado"] in ("rascunho", "agendado") else "aguardando_aprovacao"
+    ok = await _processar(post_id, p, temperature=0.95, destino=destino)
     if ok:
         _apagar(old)
         db.log(p["id"], post_id, "refeito")
@@ -144,7 +155,7 @@ async def aprovar(post_id: int, origem: str = "painel") -> bool:
     po = post(post_id)
     if not po or not po["arquivo"] or not (C.CARDS / po["arquivo"]).exists():
         return False
-    if not _claim(post_id, ("aguardando_aprovacao", "falhou"), "publicando"):
+    if not _claim(post_id, ESTADOS_ABERTOS, "publicando"):
         return False
     p = perfil(po["perfil_id"])
     pub = C.PUBLIC / po["arquivo"]
@@ -155,8 +166,8 @@ async def aprovar(post_id: int, origem: str = "painel") -> bool:
         if not p["ig_user_id"] or not p["ig_token_enc"]:
             raise ig.MetaError("perfil sem ig_user_id ou token")
         shutil.copyfile(C.CARDS / po["arquivo"], pub)
-        media = await ig.publicar(p["ig_user_id"], crypto.dec(p["ig_token_enc"]), f"{base}/{po['arquivo']}", po["legenda"])
-        _set(post_id, "publicado", media_id=media, erro=None)
+        media = await ig.publicar(p["ig_user_id"], crypto.dec(p["ig_token_enc"]), f"{base}/{po['arquivo']}", po["legenda"], po["formato"])
+        _set(post_id, "publicado", media_id=media, erro=None, agendado_para=None)
         db.log(p["id"], post_id, "publicado", f"{origem} media={media}")
         resultado = "✅ Publicado."
     except Exception as e:
@@ -172,7 +183,7 @@ async def aprovar(post_id: int, origem: str = "painel") -> bool:
 
 async def descartar(post_id: int, origem: str = "painel") -> bool:
     po = post(post_id)
-    if not po or not _claim(post_id, ("aguardando_aprovacao", "falhou"), "descartado"):
+    if not po or not _claim(post_id, ESTADOS_ABERTOS, "descartado"):
         return False
     _apagar(po["arquivo"])
     p = perfil(po["perfil_id"])
@@ -193,3 +204,101 @@ async def acao_telegram(acao: str, post_id: int, chat_id: str) -> None:
         await refazer(post_id)
     elif acao == "ds":
         await descartar(post_id, "telegram")
+
+
+# ---------------- pauta do dia e agenda local ----------------
+async def pauta(perfil_id: int, n_noticias: int = 3, n_variacoes: int = 2, formato: str = "feed",
+                com_print: bool = False, origem: str = "manual") -> int:
+    """Pesquisa as notícias em alta dentro dos temas do perfil e cria n_variacoes rascunhos por notícia
+    (ângulos diferentes). Nada é publicado: os rascunhos esperam você escolher e agendar. Devolve quantos criou."""
+    if perfil_id in RUNNING:
+        return 0
+    RUNNING.add(perfil_id)
+    try:
+        p = perfil(perfil_id)
+        if not p:
+            return 0
+        n_noticias, n_variacoes = max(1, min(n_noticias, 10)), max(1, min(n_variacoes, len(ANGULOS)))
+        formato = formato if formato in ("feed", "story") else "feed"
+        fl = db.q("SELECT * FROM feeds WHERE ativo=1 AND (perfil_id IS NULL OR perfil_id=?)", (perfil_id,))
+        usadas = {r["noticia_url"] for r in db.q("SELECT noticia_url FROM posts WHERE perfil_id=? AND noticia_url IS NOT NULL", (perfil_id,))}
+        palavras = [s.strip() for s in p["palavras_chave"].split(",") if s.strip()]
+        cands = await feeds.candidatas(fl, palavras, p["max_idade_horas"], usadas)
+        db.log(perfil_id, None, "pauta", f"{origem}: {len(cands)} candidatas")
+        criados = noticias = falhas = 0
+        for c in cands:
+            if noticias >= n_noticias or falhas >= MAX_FALHAS:
+                break
+            grupo, texto, ok_noticia = None, "", False
+            for v in range(1, n_variacoes + 1):
+                try:
+                    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_url,noticia_titulo,fonte,texto,variacao,grupo,formato,angulo,"
+                               "criado_em,atualizado_em) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                               (perfil_id, "capturado", c["url"], c["titulo"], c["fonte"], texto, v, grupo, formato,
+                                ANGULOS[v - 1], db.now(), db.now()))
+                except sqlite3.IntegrityError:
+                    break
+                if grupo is None:
+                    grupo = pid
+                    db.x("UPDATE posts SET grupo=? WHERE id=?", (pid, pid))
+                if await _processar(pid, p, temperature=0.8, destino="rascunho", com_print=com_print and v == 1):
+                    criados += 1
+                    ok_noticia = True
+                    texto = post(pid)["texto"]
+                else:
+                    falhas += 1
+                    break
+            if ok_noticia:
+                noticias += 1
+        if criados and telegram.ativo() and p["telegram_chat_id"]:
+            await telegram.avisar(p["telegram_chat_id"], f"📝 Pauta pronta: {criados} rascunhos de {noticias} notícias. "
+                                                         "Abra o painel (Pauta) para escolher e agendar.")
+        return criados
+    finally:
+        RUNNING.discard(perfil_id)
+
+
+def _utc(quando_local: str, tz: str) -> str | None:
+    """'2026-10-17T09:30' (hora do fuso configurado) -> 'YYYY-MM-DD HH:MM:SS' em UTC."""
+    try:
+        d = datetime.strptime(quando_local, "%Y-%m-%dT%H:%M").replace(tzinfo=ZoneInfo(tz))
+    except ValueError:
+        return None
+    return d.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def agendar(ids: list[int], quando_local: str, intervalo_min: int = 60) -> int:
+    """Marca os posts como agendados: o primeiro em quando_local, os seguintes com intervalo_min de distância."""
+    from datetime import timedelta
+    base = _utc(quando_local, settings.tz())
+    if not base:
+        return 0
+    t0 = datetime.strptime(base, "%Y-%m-%d %H:%M:%S")
+    feitos = 0
+    for n, pid in enumerate(ids):
+        quando = (t0 + timedelta(minutes=max(0, intervalo_min) * n)).strftime("%Y-%m-%d %H:%M:%S")
+        feitos += db.x("UPDATE posts SET estado='agendado', agendado_para=?, atualizado_em=? "
+                       "WHERE id=? AND estado IN ('rascunho','aguardando_aprovacao','agendado') AND arquivo IS NOT NULL",
+                       (quando, db.now(), pid))
+    return feitos
+
+
+def desagendar(post_id: int) -> bool:
+    return db.x("UPDATE posts SET estado='rascunho', agendado_para=NULL, atualizado_em=? WHERE id=? AND estado='agendado'",
+                (db.now(), post_id)) == 1
+
+
+def local(utc_str: str | None) -> str:
+    """UTC do banco -> 'dd/mm HH:MM' no fuso configurado (para exibir)."""
+    if not utc_str:
+        return ""
+    d = datetime.strptime(utc_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    return d.astimezone(ZoneInfo(settings.tz())).strftime("%d/%m %H:%M")
+
+
+async def publicar_agendados() -> int:
+    """Publica o que já passou da hora marcada. Chamado pelo agendador a cada ~30 s."""
+    vencidos = db.q("SELECT id FROM posts WHERE estado='agendado' AND agendado_para<=? ORDER BY agendado_para", (db.now(),))
+    for r in vencidos:
+        asyncio.create_task(aprovar(r["id"], "agenda"))
+    return len(vencidos)

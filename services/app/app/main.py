@@ -177,7 +177,7 @@ async def perfil_atual(request: Request):
 def fila(request: Request):
     logado(request)
     pid = perfil_atual_id(request)
-    posts = db.q("SELECT * FROM posts WHERE perfil_id=? AND estado NOT IN ('publicado','descartado') "
+    posts = db.q("SELECT * FROM posts WHERE perfil_id=? AND estado NOT IN ('publicado','descartado','rascunho','agendado') "
                  "ORDER BY id DESC LIMIT 50", (pid,)) if pid else []
     return render_page(request, "fila.html", posts=posts, gerando=pid in pipeline.RUNNING,
                        perfil=pipeline.perfil(pid) if pid else None,
@@ -195,6 +195,74 @@ async def gerar(request: Request):
         asyncio.create_task(pipeline.gerar(pid, 1, "manual"))
         flash(request, "Gerando um post novo. Atualize em alguns instantes.")
     return voltar(request)
+
+
+
+# ---------- pauta do dia e agenda ----------
+@app.get("/pauta")
+def pauta_page(request: Request):
+    logado(request)
+    pid = perfil_atual_id(request)
+    rasc = db.q("SELECT * FROM posts WHERE perfil_id=? AND estado='rascunho' ORDER BY COALESCE(grupo,id) DESC, variacao", (pid,)) if pid else []
+    grupos: dict[int, list] = {}
+    for r in rasc:
+        grupos.setdefault(r["grupo"] or r["id"], []).append(r)
+    return render_page(request, "pauta.html", grupos=list(grupos.values()), perfil=pipeline.perfil(pid) if pid else None,
+                       gerando=pid in pipeline.RUNNING, tz=settings.tz(),
+                       sem_llm=not db.q("SELECT 1 FROM llm_conexoes WHERE modelo!=''"))
+
+
+@app.post("/pauta/gerar")
+async def pauta_gerar(request: Request):
+    logado(request)
+    f = await form(request)
+    pid = int(f["perfil_id"])
+    if pid in pipeline.RUNNING:
+        flash(request, "Já está gerando para este perfil.", "aviso")
+    else:
+        asyncio.create_task(pipeline.pauta(pid, int(f.get("noticias") or 3), int(f.get("variacoes") or 2),
+                                           f.get("formato", "feed"), bool(f.get("com_print")), "manual"))
+        flash(request, "Pesquisando as notícias em alta e gerando os rascunhos. Atualize a página em alguns instantes.")
+    return voltar(request, "/pauta")
+
+
+@app.post("/pauta/agendar")
+async def pauta_agendar(request: Request):
+    logado(request)
+    dados = await request.form()
+    if not secrets.compare_digest(str(dados.get("csrf", "")), request.session.get("csrf", "x")):
+        raise HTTPException(403, "csrf")
+    ids = [int(i) for i in dados.getlist("ids") if str(i).isdigit()]
+    acao = dados.get("acao", "agendar")
+    if not ids:
+        flash(request, "Marque pelo menos um post.", "aviso")
+    elif acao == "descartar":
+        n = 0
+        for i in ids:
+            n += 1 if await pipeline.descartar(i) else 0
+        flash(request, f"{n} descartado(s).")
+    else:
+        n = pipeline.agendar(ids, str(dados.get("quando", "")), int(dados.get("intervalo") or 60))
+        flash(request, f"{n} post(s) agendado(s)." if n else "Data inválida ou posts sem imagem.", "ok" if n else "erro")
+    return voltar(request, "/pauta")
+
+
+@app.get("/agenda")
+def agenda_page(request: Request):
+    logado(request)
+    pid = perfil_atual_id(request)
+    posts = db.q("SELECT * FROM posts WHERE perfil_id=? AND estado='agendado' ORDER BY agendado_para", (pid,)) if pid else []
+    for p in posts:
+        p["quando"] = pipeline.local(p["agendado_para"])
+    return render_page(request, "agenda.html", posts=posts, tz=settings.tz(), perfil=pipeline.perfil(pid) if pid else None)
+
+
+@app.post("/posts/{post_id}/desagendar")
+async def desagendar(request: Request, post_id: int):
+    logado(request)
+    await form(request)
+    flash(request, "Voltou para os rascunhos." if pipeline.desagendar(post_id) else "Não foi possível.")
+    return voltar(request, "/agenda")
 
 
 @app.post("/posts/{post_id}/{acao}")
@@ -221,9 +289,9 @@ async def editar_legenda(request: Request, post_id: int):
 @app.get("/cards/{nome}")
 def card(request: Request, nome: str):
     logado(request)
-    if not re.fullmatch(r"[0-9a-f]{32}\.jpg", nome) or not (C.CARDS / nome).exists():
+    if not re.fullmatch(r"[0-9a-f]{32}\.(jpg|mp4)", nome) or not (C.CARDS / nome).exists():
         raise HTTPException(404)
-    return FileResponse(C.CARDS / nome, media_type="image/jpeg")
+    return FileResponse(C.CARDS / nome, media_type="video/mp4" if nome.endswith(".mp4") else "image/jpeg")
 
 
 # ---------- perfis ----------

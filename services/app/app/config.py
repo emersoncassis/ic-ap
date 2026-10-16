@@ -23,6 +23,7 @@ CLOUDFLARED_BIN = env("CLOUDFLARED_BIN", "cloudflared")
 IG_BASE = env("IG_GRAPH_BASE") or f"https://graph.facebook.com/{env('IG_GRAPH_VERSION', 'v23.0')}"
 IG_POLL_SECONDS = float(env("IG_POLL_SECONDS", "5"))
 IG_POLL_TRIES = int(env("IG_POLL_TRIES", "12"))
+TICK_SECONDS = float(env("SCHEDULER_TICK", "30"))
 TELEGRAM_API = env("TELEGRAM_API_BASE", "https://api.telegram.org")
 GEMINI_API_BASE = env("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
 ANTHROPIC_API_BASE = env("ANTHROPIC_API_BASE", "https://api.anthropic.com/v1")

@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block title %}Agenda · ic-ap{% endblock %}
+{% block body %}
+<h1>Agenda</h1>
+<p class="sub">{{ perfil.nome if perfil else '—' }} · horários no fuso {{ tz }}. O app publica sozinho na hora marcada (ele precisa estar ligado).</p>
+{% for p in posts %}
+<div class="card post" style="margin-bottom:14px">
+  <div>{% if p.arquivo.endswith('.mp4') %}<video src="/cards/{{ p.arquivo }}" controls style="width:100%;border-radius:10px"></video>{% else %}<img src="/cards/{{ p.arquivo }}" alt="card">{% endif %}</div>
+  <div>
+    <h2 style="margin:0">{{ p.quando }} <small>· {{ p.formato }}</small></h2>
+    <p>{{ p.manchete or p.noticia_titulo }}</p>
+    <p style="white-space:pre-wrap;font-size:13px" class="mut">{{ (p.legenda or '')[:400] }}</p>
+    <div class="acts">
+      <form method="post" action="/posts/{{ p.id }}/desagendar"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sec" type="submit">Voltar para rascunho</button></form>
+      <form method="post" action="/posts/{{ p.id }}/aprovar"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" onclick="return confirm('Publicar agora?')">Postar agora</button></form>
+    </div>
+  </div>
+</div>
+{% else %}<div class="card mut">Nada agendado. Escolha posts em <a href="/pauta">Pauta</a>.</div>{% endfor %}
+{% endblock %}

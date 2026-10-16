@@ -20,14 +20,31 @@ async def stop() -> None:
         await _state["pw"].stop()
 
 
-async def card(manchete: str, reacao: str, fonte: str, handle: str, nome: str) -> tuple[str, bool]:
-    """Devolve (nome_do_arquivo, texto_estourou). O arquivo fica em CARDS (privado)."""
+async def print_pagina(url: str) -> str | None:
+    """Print do topo da matéria (1080x760) como data URI. None se a página não carregar."""
+    import base64
+    page = await _state["browser"].new_page(viewport={"width": 1080, "height": 760})
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        await page.wait_for_timeout(800)
+        return "data:image/jpeg;base64," + base64.b64encode(await page.screenshot(type="jpeg", quality=80)).decode()
+    except Exception:
+        return None
+    finally:
+        await page.close()
+
+
+async def card(manchete: str, reacao: str, fonte: str, handle: str, nome: str,
+               formato: str = "feed", print_uri: str | None = None) -> tuple[str, bool]:
+    """Devolve (nome_do_arquivo, texto_estourou). O arquivo fica em CARDS (privado).
+    formato 'story' usa 1080x1920 (reacao_story.html)."""
+    story = formato == "story"
     env = Environment(loader=FileSystemLoader(str(C.CARD_TEMPLATES)), autoescape=select_autoescape(["html"]))
     paragrafos = [p.strip() for p in re.split(r"\n\s*\n|\n", reacao) if p.strip()]
-    html = env.get_template("reacao.html").render(
-        manchete=manchete, paragrafos=paragrafos, fonte=fonte, handle=handle, nome=nome)
+    html = env.get_template("reacao_story.html" if story else "reacao.html").render(
+        manchete=manchete, paragrafos=paragrafos, fonte=fonte, handle=handle, nome=nome, print_uri=print_uri)
     name = f"{uuid.uuid4().hex}.jpg"
-    page = await _state["browser"].new_page(viewport={"width": 1080, "height": 1350})
+    page = await _state["browser"].new_page(viewport={"width": 1080, "height": 1920 if story else 1350})
     try:
         await page.set_content(html, wait_until="load")
         estourou = await page.evaluate(

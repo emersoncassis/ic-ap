@@ -23,9 +23,19 @@ async def _graph(c: httpx.AsyncClient, method: str, path: str, token: str, **par
     return data
 
 
-async def publicar(ig_user_id: str, token: str, image_url: str, legenda: str) -> str:
+def _params_midia(url: str, legenda: str, formato: str) -> dict:
+    """feed: foto; story: imagem ou vídeo (sem legenda); reel: vídeo."""
+    video = url.lower().endswith(".mp4")
+    if formato == "story":
+        return {"media_type": "STORIES", ("video_url" if video else "image_url"): url}
+    if formato == "reel" or video:
+        return {"media_type": "REELS", "video_url": url, "caption": legenda, "share_to_feed": "true"}
+    return {"image_url": url, "caption": legenda}
+
+
+async def publicar(ig_user_id: str, token: str, media_url: str, legenda: str, formato: str = "feed") -> str:
     async with httpx.AsyncClient(timeout=60) as c:
-        cont = await _graph(c, "POST", f"{ig_user_id}/media", token, image_url=image_url, caption=legenda)
+        cont = await _graph(c, "POST", f"{ig_user_id}/media", token, **_params_midia(media_url, legenda, formato))
         cid = cont["id"]
         for _ in range(C.IG_POLL_TRIES):
             st = (await _graph(c, "GET", cid, token, fields="status_code")).get("status_code")

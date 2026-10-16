@@ -1,5 +1,6 @@
 """Leitura de RSS, filtro e extração do texto da matéria."""
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from time import mktime
 
@@ -44,8 +45,21 @@ async def candidatas(feeds: list[dict], palavras: list[str], max_idade_h: int, j
                 res.append({**it, "fonte": f["nome"], "score": s})
         except Exception:
             continue  # um feed quebrado não derruba os outros
-    res.sort(key=lambda i: (i["score"], i["data"]), reverse=True)
+    _marcar_em_alta(res)
+    res.sort(key=lambda i: (i["score"] + i["mencoes"], i["data"]), reverse=True)
     return res
+
+
+def _tokens(titulo: str) -> set[str]:
+    return {w for w in re.findall(r"\w+", titulo.lower()) if len(w) > 4}
+
+
+def _marcar_em_alta(itens: list[dict]) -> None:
+    """'Em alta' = outras matérias (de outras fontes) que falam do mesmo assunto, medido pelas palavras do título."""
+    toks = [_tokens(i["titulo"]) for i in itens]
+    for n, i in enumerate(itens):
+        i["mencoes"] = sum(1 for m, j in enumerate(itens)
+                           if m != n and j["fonte"] != i["fonte"] and len(toks[n] & toks[m]) >= 2)
 
 
 async def extrair(url: str) -> dict:

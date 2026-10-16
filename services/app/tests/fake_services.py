@@ -40,7 +40,7 @@ def make(port: int) -> FastAPI:
     def feed():
         now = format_datetime(datetime.now(timezone.utc))
         itens = "".join(f"<item><title>IA muda a empresa {i}</title><link>http://127.0.0.1:{port}/art/{i}</link>"
-                        f"<pubDate>{now}</pubDate><description>IA e empresas</description></item>" for i in range(1, 13))
+                        f"<pubDate>{now}</pubDate><description>IA e empresas</description></item>" for i in range(1, 41))
         return Response(f'<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>{itens}</channel></rss>',
                         media_type="application/rss+xml")
 
@@ -139,10 +139,13 @@ def make(port: int) -> FastAPI:
         p = dict(request.query_params)
         if st["graph_fail"]:
             return JSONResponse({"error": {"message": "Invalid OAuth access token.", "code": 190}}, status_code=400)
-        async with httpx.AsyncClient() as c:  # a Meta precisa conseguir BUSCAR a imagem pela URL pública
-            r = await c.get(p["image_url"])
-        if r.status_code != 200 or r.content[:2] != b"\xff\xd8":
-            return JSONResponse({"error": {"message": "Falha ao baixar a imagem", "code": 9004}}, status_code=400)
+        url = p.get("image_url") or p.get("video_url")
+        async with httpx.AsyncClient() as c:  # a Meta precisa conseguir BUSCAR a mídia pela URL pública
+            r = await c.get(url)
+        jpeg = r.content[:2] == b"\xff\xd8"
+        mp4 = r.content[4:8] == b"ftyp"
+        if r.status_code != 200 or not (jpeg if "image_url" in p else mp4):
+            return JSONResponse({"error": {"message": "Falha ao baixar a mídia", "code": 9004}}, status_code=400)
         st["graph"].append(["media", p])
         return {"id": "CONT1"}
 

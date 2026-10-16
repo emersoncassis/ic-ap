@@ -3,7 +3,7 @@ import asyncio, re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import db, pipeline, settings
+from . import config as C, db, pipeline, settings
 
 JANELA_MIN = 90  # slot perdido há mais que isso (ex.: app desligado) é descartado, não disparado atrasado
 
@@ -30,10 +30,11 @@ def slots_devidos(agora: datetime) -> list[tuple[int, str]]:
 async def loop() -> None:
     while True:
         try:
+            await pipeline.publicar_agendados()
             for pid, _ in slots_devidos(datetime.now(ZoneInfo(settings.tz()))):
                 asyncio.create_task(pipeline.gerar(pid, 1, "agenda"))
         except asyncio.CancelledError:
             raise
         except Exception as e:
             db.log(None, None, "scheduler_erro", str(e))
-        await asyncio.sleep(30)
+        await asyncio.sleep(C.TICK_SECONDS)

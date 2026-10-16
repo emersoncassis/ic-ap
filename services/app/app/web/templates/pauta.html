@@ -1,0 +1,46 @@
+{% extends "base.html" %}{% block title %}Pauta · ic-ap{% endblock %}
+{% block body %}
+<h1>Pauta do dia</h1>
+<p class="sub">{{ perfil.nome if perfil else '—' }} · o app pesquisa o que está em alta nos seus temas e cria versões diferentes de cada notícia. Você escolhe e agenda.</p>
+{% if sem_llm %}<div class="flash aviso">Nenhum modelo de linguagem configurado. <a href="/llm">Configure em LLM</a>.</div>{% endif %}
+{% if perfil %}
+<form method="post" action="/pauta/gerar" class="card" style="margin-bottom:20px">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}">
+  <div class="row">
+    <div><label>Notícias</label><input type="number" name="noticias" min="1" max="10" value="3"></div>
+    <div><label>Versões por notícia</label><input type="number" name="variacoes" min="1" max="4" value="2"></div>
+    <div><label>Formato</label><select name="formato"><option value="feed">Feed (4:5)</option><option value="story">Story (9:16)</option></select></div>
+    <div><label>Story com print da matéria</label><label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" name="com_print"> incluir (só o 1º de cada notícia)</label></div>
+  </div>
+  <div class="acts"><button type="submit" {{ 'disabled' if gerando }}>{{ 'Gerando…' if gerando else 'Gerar pauta' }}</button>
+    <a class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line)" href="/pauta">Atualizar</a></div>
+  <small>Temas usados: {{ perfil.palavras_chave or 'todos os feeds (sem filtro)' }}. Troque em Perfis.</small>
+</form>
+{% endif %}
+
+{% if grupos %}
+<form method="post" action="/pauta/agendar">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="card" style="margin-bottom:16px;position:sticky;top:0;z-index:2">
+    <div class="row">
+      <div><label>Postar em ({{ tz }})</label><input type="datetime-local" name="quando"></div>
+      <div><label>Intervalo entre posts (min)</label><input type="number" name="intervalo" min="0" value="60"></div>
+    </div>
+    <div class="acts"><button type="submit" name="acao" value="agendar">Agendar selecionados</button>
+      <button class="bad" type="submit" name="acao" value="descartar" onclick="return confirm('Descartar os selecionados?')">Descartar selecionados</button></div>
+  </div>
+  {% for g in grupos %}
+  <h2>{{ g[0].noticia_titulo }} <small>· {{ g[0].fonte }} · <a href="{{ g[0].noticia_url }}" target="_blank" rel="noopener">fonte</a></small></h2>
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr))">
+    {% for p in g %}
+    <div class="card">
+      <label style="display:flex;gap:8px;align-items:center;margin:0 0 8px;color:var(--fg)"><input type="checkbox" name="ids" value="{{ p.id }}"> #{{ p.id }} · {{ p.angulo.split(',')[0] if p.angulo }}</label>
+      <a href="/cards/{{ p.arquivo }}" target="_blank"><img src="/cards/{{ p.arquivo }}" alt="card" style="width:100%;border-radius:10px"></a>
+      <p style="font-size:13px;white-space:pre-wrap;max-height:130px;overflow:auto">{{ p.legenda }}</p>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</form>
+{% else %}<div class="card mut">Nenhum rascunho. Clique em “Gerar pauta”.</div>{% endif %}
+{% endblock %}

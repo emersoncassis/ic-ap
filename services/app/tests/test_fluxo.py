@@ -317,7 +317,7 @@ def test_refazer_troca_o_card(logado, fake):
 
 
 def test_noticia_nao_se_repete(logado):
-    urls = [r["noticia_url"] for r in db.q("SELECT noticia_url FROM posts")]
+    urls = [(r["noticia_url"], r["variacao"]) for r in db.q("SELECT noticia_url, variacao FROM posts")]
     assert len(urls) == len(set(urls))
 
 
@@ -364,3 +364,103 @@ def test_conexoes_do_perfil(logado, fake):
     for alvo, ok in (("llm", "LLM OK"), ("meta", "emerson_teste"), ("telegram", "Telegram OK"), ("publico", "URL pública OK")):
         post_form(logado, f"/conexoes/{alvo}", perfil_id="1")
         assert ok in ver(logado, "/conexoes"), alvo
+
+
+# ---------------- pauta do dia, variações e agenda ----------------
+def _esperar_pauta(n_esperado):
+    esperar(lambda: 1 not in pipeline.RUNNING and len(db.q("SELECT 1 FROM posts WHERE estado='rascunho'")) >= n_esperado, 90)
+
+
+def test_pauta_gera_variacoes_em_rascunho(logado, fake):
+    db.x("DELETE FROM posts WHERE estado IN ('rascunho','agendado')")
+    configurar_perfil(logado)
+    post_form(logado, "/pauta/gerar", perfil_id="1", noticias="2", variacoes="2", formato="feed")
+    _esperar_pauta(4)
+    r = db.q("SELECT * FROM posts WHERE estado='rascunho' ORDER BY grupo, variacao")
+    assert len(r) == 4 and len({p["grupo"] for p in r}) == 2
+    assert all(len({p["noticia_url"] for p in r if p["grupo"] == g}) == 1 for g in {p["grupo"] for p in r})
+    assert len({p["angulo"] for p in r}) == 2, "cada versão tem um ângulo diferente"
+    assert sum("Ângulo desta versão" in u for u in fake.st()["llm_users"]) == 4
+    assert not any(m == "sendPhoto" for m, _ in fake.st()["tg"]), "rascunhos não inundam o Telegram"
+    esperar(lambda: any(m == "sendMessage" and "Pauta pronta" in d.get("text", "") for m, d in fake.st()["tg"]))
+    html = ver(logado, "/pauta")
+    assert html.count('name="ids"') == 4 and "Agendar selecionados" in html
+    assert "/pauta" in ver(logado, "/") and not any(f'/posts/{p["id"]}/aprovar' in ver(logado, "/") for p in r), "rascunhos ficam fora da fila"
+
+
+def test_agendar_com_intervalo_e_fuso(logado):
+    ids = [p["id"] for p in db.q("SELECT id FROM posts WHERE estado='rascunho' ORDER BY id LIMIT 3")]
+    post_form(logado, "/pauta/agendar", ids=ids, quando="2031-01-01T09:00", intervalo="60", acao="agendar")
+    ag = db.q("SELECT agendado_para FROM posts WHERE estado='agendado' ORDER BY agendado_para")
+    assert [a["agendado_para"] for a in ag] == ["2031-01-01 12:00:00", "2031-01-01 13:00:00", "2031-01-01 14:00:00"], "09:00 em São Paulo = 12:00 UTC"
+    html = ver(logado, "/agenda")
+    assert "01/01 09:00" in html and "01/01 10:00" in html and "01/01 11:00" in html
+    assert pipeline.agendar([ids[0]], "lixo") == 0
+    post_form(logado, f"/posts/{ids[2]}/desagendar")
+    assert pipeline.post(ids[2])["estado"] == "rascunho" and pipeline.post(ids[2])["agendado_para"] is None
+    post_form(logado, f"/posts/{ids[1]}/desagendar")
+
+
+def test_agendado_vencido_e_publicado_sozinho(logado, fake):
+    pid = db.one("SELECT id FROM posts WHERE estado='rascunho' ORDER BY id LIMIT 1")["id"]
+    post_form(logado, "/pauta/agendar", ids=[pid], quando="2020-01-01T09:00", intervalo="0", acao="agendar")
+    p = esperar(lambda: (lambda r: r if r["estado"] == "publicado" else None)(pipeline.post(pid)), 20)
+    media = next(d for t, d in fake.st()["graph"] if t == "media")
+    assert media["image_url"] == f"{PUBLIC_URL}/{p['arquivo']}" and "media_type" not in media and p["agendado_para"] is None
+    assert not (C.PUBLIC / p["arquivo"]).exists()
+
+
+def test_agendado_futuro_nao_publica(logado, fake):
+    pid = db.one("SELECT id FROM posts WHERE estado='rascunho' ORDER BY id LIMIT 1")["id"]
+    post_form(logado, "/pauta/agendar", ids=[pid], quando="2031-06-01T09:00", intervalo="0", acao="agendar")
+    import time; time.sleep(2.5)
+    assert pipeline.post(pid)["estado"] == "agendado" and not any(t == "publish" for t, _ in fake.st()["graph"])
+    post_form(logado, f"/posts/{pid}/desagendar")
+
+
+def test_descartar_em_lote(logado):
+    ids = [p["id"] for p in db.q("SELECT id FROM posts WHERE estado='rascunho'")]
+    post_form(logado, "/pauta/agendar", ids=ids, acao="descartar")
+    assert not db.q("SELECT 1 FROM posts WHERE estado='rascunho'")
+    assert not any((C.CARDS / p["arquivo"]).exists() for p in db.q("SELECT arquivo FROM posts WHERE estado='descartado' AND arquivo IS NOT NULL ORDER BY id DESC LIMIT 4"))
+
+
+def test_story_com_print_da_materia(logado, fake):
+    post_form(logado, "/pauta/gerar", perfil_id="1", noticias="1", variacoes="1", formato="story", com_print="on")
+    _esperar_pauta(1)
+    p = db.one("SELECT * FROM posts WHERE estado='rascunho' AND formato='story'")
+    assert jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1920)
+    post_form(logado, f"/posts/{p['id']}/aprovar")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
+    media = [d for t, d in fake.st()["graph"] if t == "media"][-1]
+    assert media["media_type"] == "STORIES" and "caption" not in media and media["image_url"].endswith(p["arquivo"])
+
+
+def test_em_alta_prioriza_assunto_repetido():
+    from app import feeds
+    it = [{"titulo": "Nvidia lança chip novo para inteligência artificial", "fonte": "A"},
+          {"titulo": "Chip novo da Nvidia promete inteligência artificial mais barata", "fonte": "B"},
+          {"titulo": "Receita de bolo de cenoura fofinho", "fonte": "C"}]
+    feeds._marcar_em_alta(it)
+    assert [i["mencoes"] for i in it] == [1, 1, 0]
+
+
+def test_migracao_de_banco_antigo(tmp_path):
+    import sqlite3
+    velho = sqlite3.connect(tmp_path / "v.db"); velho.row_factory = sqlite3.Row
+    velho.executescript("""CREATE TABLE perfis(id INTEGER PRIMARY KEY, nome TEXT);
+      CREATE TABLE posts(id INTEGER PRIMARY KEY, perfil_id INTEGER NOT NULL, estado TEXT NOT NULL, noticia_url TEXT, noticia_titulo TEXT,
+      fonte TEXT, texto TEXT, json_llm TEXT, manchete TEXT, reacao TEXT, legenda TEXT, arquivo TEXT, media_id TEXT, erro TEXT,
+      tg_message_id TEXT, criado_em TEXT, atualizado_em TEXT, UNIQUE(perfil_id, noticia_url));
+      INSERT INTO posts(perfil_id,estado,noticia_url) VALUES(1,'publicado','http://x');""")
+    original = db._conn
+    db._conn = velho
+    try:
+        with db._lock:
+            db._migrar()
+        assert "musica_modo" in {r[1] for r in velho.execute("PRAGMA table_info(perfis)")}
+        r = velho.execute("SELECT estado, variacao, formato FROM posts").fetchone()
+        assert (r["estado"], r["variacao"], r["formato"]) == ("publicado", 1, "feed")
+        velho.execute("INSERT INTO posts(perfil_id,estado,noticia_url,variacao) VALUES(1,'rascunho','http://x',2)")  # mesma notícia, outra versão
+    finally:
+        db._conn = original

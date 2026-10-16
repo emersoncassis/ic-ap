@@ -13,7 +13,7 @@
 <div class="grid">
 {% for p in posts %}
   <div class="card post">
-    <div>{% if p.arquivo %}<a href="/cards/{{ p.arquivo }}" target="_blank"><img src="/cards/{{ p.arquivo }}" alt="card"></a>{% else %}<div class="mut">sem imagem</div>{% endif %}</div>
+    <div>{% if p.arquivo and p.arquivo.endswith('.mp4') %}<video src="/cards/{{ p.arquivo }}" controls style="width:100%;border-radius:10px"></video>{% elif p.arquivo %}<a href="/cards/{{ p.arquivo }}" target="_blank"><img src="/cards/{{ p.arquivo }}" alt="card"></a>{% else %}<div class="mut">sem imagem</div>{% endif %}</div>
     <div>
       <span class="badge {{ p.estado }}">{{ p.estado.replace('_',' ') }}</span> <small>#{{ p.id }} · {{ p.fonte }}</small>
       <h2 style="margin:8px 0 2px">{{ p.manchete or p.noticia_titulo }}</h2>
