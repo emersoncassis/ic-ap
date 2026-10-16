@@ -6,7 +6,7 @@
 RSS / link no Telegram
         │
         ▼
- [n8n] ── extrai texto (trafilatura) ──► [Ollama] ◄── meu_contexto.md
+ [app] ── extrai texto (trafilatura) ──► [Ollama] ◄── meu_contexto.md
         │                                   │ JSON
         │                                   ▼
         │                         [render: HTML → JPEG 1080×1350]
@@ -22,15 +22,14 @@ RSS / link no Telegram
 
 | Serviço | Imagem/tecnologia | Porta | Função |
 |---|---|---|---|
-| `n8n` | n8nio/n8n | 5678 (local) | Orquestrador |
 | `ollama` | ollama/ollama, GPU NVIDIA | 11434 (local) | LLM local |
-| `tools` | Python (FastAPI) + trafilatura + Playwright | 8000 (local) | `/extract` URL→texto, `/render` JSON→JPEG, `DELETE /public/{arquivo}` |
+| `app` | Python (FastAPI) + SQLite + Playwright | 8000 (local) | Painel web, agendador, pipeline, Telegram, publicação |
 | `public` | nginx | só via túnel | Serve apenas `data/public/` (JPEGs temporários) |
 | `cloudflared` | cloudflare/cloudflared | — | Túnel nomeado: hostname público → `http://public:80` |
 
 Tudo exceto o túnel fica em `127.0.0.1`. O que sai para a internet é só a pasta de JPEGs, com nome aleatório (uuid), apagada após o publish. O PC fica ligado, então o túnel nomeado fica sempre de pé.
 
-Decisão tomada: n8n como orquestrador, com a lógica pesada (extrair, renderizar) no serviço `tools`, que é testável sem n8n. Alternativa descartada por ora: tudo em Python. (n8n (visual, rápido de montar, mas workflow em JSON é ruim de versionar) vs. serviço Python próprio (FastAPI + scheduler, mais fácil de testar e versionar). **Recomendação: n8n na v1** para chegar rápido; exportar o workflow JSON para `workflows/` a cada mudança.)
+Decisão: app Python único no lugar do n8n (ver spec 06). Os cards ficam privados em `data/cards`; só são copiados para `data/public` durante o publish.
 
 ## Estrutura do repositório
 
@@ -45,9 +44,7 @@ ic-ap/
 ├── templates/
 │   └── reacao.html           # Tailwind/CSS, variáveis {{manchete}} {{reacao}} {{fonte}}
 ├── services/
-│   └── extractor/            # URL → texto
-├── workflows/
-│   └── post-reacao.json      # export do n8n
+│   └── app/                  # painel, pipeline, testes
 └── data/                     # gitignored: jpgs gerados, logs, histórico
 ```
 

@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block title %}Entrar · ic-ap{% endblock %}
+{% block body %}
+<div class="card" style="max-width:380px;margin:80px auto 0">
+  <h1>ic-ap</h1><p class="sub">Painel de conteúdo</p>
+  {% if erro %}<div class="flash erro">{{ erro }}</div>{% endif %}
+  <form method="post" action="/login">
+    <label>Senha</label><input type="password" name="senha" autofocus required>
+    <div class="acts"><button type="submit">Entrar</button></div>
+  </form>
+</div>
+{% endblock %}

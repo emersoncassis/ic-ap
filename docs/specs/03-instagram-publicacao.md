@@ -40,7 +40,7 @@ Um container filho por imagem (`is_carousel_item=true`), depois um container `CA
 
 ## Token
 
-- Se o token da Página expirar, o publish devolve erro de token. O serviço mostra a mensagem da Meta e o n8n avisa no Telegram.
+- Se o token da Página expirar, o publish devolve erro de token. O app mostra a mensagem da Meta no painel e avisa no Telegram.
 - Rotina de conferência (ex.: semanal) chamando `check` ou `GET /{IG_ID}?fields=username` para detectar token inválido antes de um post.
 - Nunca commitar token.
 
@@ -50,4 +50,4 @@ URL inacessível, formato não-JPEG, token expirado, container em `ERROR`/`EXPIR
 
 ## Implementação
 
-`POST /publish` no serviço `tools`, corpo `{"arquivo": "<uuid>.jpg", "legenda": "..."}`. Cria o container com a URL pública, consulta `status_code` até `FINISHED` (até ~60 s, configurável), chama `media_publish`, devolve `{"media_id"}` e apaga o JPEG. Em erro da Meta responde 502 com a mensagem (sem o token). Versão da API em `IG_GRAPH_VERSION` (padrão `v23.0`; atualizar quando a Meta descontinuar).
+Módulo `ig.py` do app (chamado ao aprovar um post no painel ou no Telegram). Copia o card para a pasta pública, cria o container com a URL pública, consulta `status_code` até `FINISHED` (até ~60 s, configurável), chama `media_publish`, devolve `{"media_id"}` e apaga o JPEG. Em erro da Meta responde 502 com a mensagem (sem o token). Versão da API em `IG_GRAPH_VERSION` (padrão `v23.0`; atualizar quando a Meta descontinuar).

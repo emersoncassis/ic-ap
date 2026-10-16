@@ -1,19 +1,25 @@
 # 06 · Dashboard web e multi-perfil
 
+## Status (v1 implementada)
+
+Implementado em `services/app`: login, fila (aprovar/refazer/descartar/editar legenda), perfis (token criptografado, contexto, horários, LLM), feeds globais e por perfil, conexões com teste de Meta/Ollama/Telegram/URL pública, histórico, agendador por horário, bot do Telegram. O n8n foi removido.
+Diferenças em relação ao texto abaixo: os horários (`horarios`, ex.: `09:00,18:00`) substituem `posts_por_dia`.
+Ainda **não** implementado: importar contexto a partir do site, métricas de alcance, Cloudflare Access para acesso externo, limpeza automática de cards antigos.
+
 ## Objetivo
 
 Painel web para gerenciar a esteira sem editar arquivos: trocar o perfil que posta (Emerson, Iago, Igor), ver a fila de posts, aprovar/descartar, ajustar contexto, feeds e frequência. A aplicação deixa de ser "do Emerson" e passa a servir várias pessoas.
 
-## Decisão de arquitetura (proposta)
+## Decisão de arquitetura (aprovada e implementada)
 
-Com várias contas e configuração editável na web, o n8n deixa de compensar: o estado (perfis, fila, histórico) precisa de banco e de uma interface própria. **Proposta: um app Python único** (FastAPI + Jinja2 + HTMX, SQLite) que concentra:
+Com várias contas e configuração editável na web, o n8n deixa de compensar: o estado (perfis, fila, histórico) precisa de banco e de uma interface própria. **App Python único** (FastAPI + Jinja2 + HTMX, SQLite) que concentra:
 
 - dashboard web
 - agendador (cron por perfil)
 - pipeline: feed → extração → LLM → render → aprovação → publish
 - bot do Telegram (aprovação pelo celular)
 
-O serviço `tools` atual (`/extract`, `/render`, `/publish`) vira módulo desse app. Sem etapa de build de frontend. O n8n sai do compose, a menos que você queira mantê-lo para outras automações. **A confirmar com o Emerson antes de implementar.**
+Sem etapa de build de frontend. O n8n saiu do compose.
 
 ## Modelo de dados
 

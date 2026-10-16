@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block title %}Conexões · ic-ap{% endblock %}
+{% block body %}
+<h1>Conexões</h1><p class="sub">Teste cada ligação antes de ligar o perfil{% if perfil %}: <b>{{ perfil.nome }}</b>{% endif %}.</p>
+{% if perfil %}
+<div class="grid">
+{% for alvo, tit, desc in [('meta','Instagram (Meta)','Confere o token e o IG_USER_ID, e mostra a conta.'),('ollama','Ollama (modelo local)','Confere se o servidor responde e o modelo está instalado.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('publico','URL pública (túnel)','Grava um arquivo de teste e busca pela internet em ' ~ (base or '— PUBLIC_BASE_URL vazia —') ~ '.')] %}
+  <div class="card"><b>{{ tit }}</b><p class="mut" style="margin:4px 0 10px">{{ desc }}</p>
+    <form method="post" action="/conexoes/{{ alvo }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}"><button class="sec" type="submit">Testar</button></form></div>
+{% endfor %}
+</div>
+{% else %}<div class="card mut">Crie um perfil primeiro.</div>{% endif %}
+{% endblock %}

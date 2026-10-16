@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block title %}Histórico · ic-ap{% endblock %}
+{% block body %}
+<h1>Histórico</h1><p class="sub">Posts publicados e descartados, e as últimas ações.</p>
+<div class="card"><table>
+  <tr><th>#</th><th>Estado</th><th>Manchete</th><th>Fonte</th><th>Quando</th><th>Instagram</th></tr>
+  {% for p in posts %}<tr><td>{{ p.id }}</td><td><span class="badge {{ p.estado }}">{{ p.estado }}</span></td><td>{{ p.manchete or p.noticia_titulo }}</td><td>{{ p.fonte }}</td><td>{{ p.atualizado_em }}</td><td>{{ p.media_id or '' }}</td></tr>
+  {% else %}<tr><td colspan="6" class="mut">Nada ainda.</td></tr>{% endfor %}
+</table></div>
+<h2>Eventos recentes</h2>
+<div class="card"><table>{% for e in eventos %}<tr><td class="mut">{{ e.criado_em }}</td><td>{{ e.tipo }}</td><td>{{ e.detalhe }}</td></tr>{% endfor %}</table></div>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}{% block title %}Fila · ic-ap{% endblock %}
+{% block body %}
+<h1>Fila de posts</h1>
+<p class="sub">{{ perfil.nome if perfil else '—' }}{% if perfil and not perfil.ativo %} · <span class="err">perfil desligado: o agendador não gera posts</span>{% endif %}</p>
+{% if perfil %}
+<form method="post" action="/gerar" style="margin-bottom:20px">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}">
+  <button type="submit" {{ 'disabled' if gerando }}>{{ 'Gerando…' if gerando else 'Gerar um post agora' }}</button>
+  <a class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line)" href="/">Atualizar</a>
+</form>
+{% endif %}
+<div class="grid">
+{% for p in posts %}
+  <div class="card post">
+    <div>{% if p.arquivo %}<a href="/cards/{{ p.arquivo }}" target="_blank"><img src="/cards/{{ p.arquivo }}" alt="card"></a>{% else %}<div class="mut">sem imagem</div>{% endif %}</div>
+    <div>
+      <span class="badge {{ p.estado }}">{{ p.estado.replace('_',' ') }}</span> <small>#{{ p.id }} · {{ p.fonte }}</small>
+      <h2 style="margin:8px 0 2px">{{ p.manchete or p.noticia_titulo }}</h2>
+      <small><a href="{{ p.noticia_url }}" target="_blank" rel="noopener">{{ p.noticia_url }}</a></small>
+      {% if p.erro %}<p class="err">{{ p.erro }}</p>{% endif %}
+      {% if p.estado in ('aguardando_aprovacao','falhou') %}
+      <form method="post" action="/posts/{{ p.id }}/legenda">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label>Legenda</label><textarea name="legenda">{{ p.legenda or '' }}</textarea>
+        <div class="acts"><button class="sec" type="submit">Salvar legenda</button></div>
+      </form>
+      <div class="acts">
+        {% for a, rot, cls in [('aprovar','Postar agora',''),('refazer','Refazer','sec'),('descartar','Descartar','bad')] %}
+        <form method="post" action="/posts/{{ p.id }}/{{ a }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="{{ cls }}" type="submit" {% if a=='aprovar' %}onclick="return confirm('Publicar no Instagram agora?')"{% endif %}>{{ 'Tentar de novo' if a=='aprovar' and p.estado=='falhou' else rot }}</button></form>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+{% else %}<div class="card mut">Nada na fila. Use “Gerar um post agora” ou aguarde o horário agendado.</div>
+{% endfor %}
+</div>
+{% endblock %}

@@ -11,26 +11,17 @@ services:
           devices:
             - {driver: nvidia, count: all, capabilities: [gpu]}
 
-  tools:
-    build: ./services/tools
+  app:
+    build: ./services/app
     restart: unless-stopped
-    env_file: .env
-    ports: ["127.0.0.1:8000:8000"]
-    volumes:
-      - ./templates:/app/templates:ro
-      - ./data:/data
-
-  n8n:
-    image: docker.n8n.io/n8nio/n8n:latest
-    restart: unless-stopped
-    ports: ["127.0.0.1:5678:5678"]
     env_file: .env
     environment:
-      - GENERIC_TIMEZONE=America/Sao_Paulo
       - TZ=America/Sao_Paulo
-      - N8N_SECURE_COOKIE=false
+    ports: ["127.0.0.1:8000:8000"]   # painel: só local. Acesso externo, só via Cloudflare Access (outro hostname)
+    depends_on: [ollama]
     volumes:
-      - n8n_data:/home/node/.n8n
+      - ./data:/data
+      - ./templates:/srv/card-templates:ro
       - ./context:/context:ro
       - ./config:/config:ro
 
@@ -52,4 +43,3 @@ services:
 
 volumes:
   ollama_models:
-  n8n_data:

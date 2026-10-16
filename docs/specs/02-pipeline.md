@@ -5,7 +5,7 @@
 1. **Automático:** cron (ex.: 1×/dia) lê feeds RSS configurados e escolhe as N notícias mais relevantes ainda não processadas.
 2. **Manual:** você manda um link ao bot do Telegram.
 
-Deduplicação: guardar hash/URL de cada notícia já processada (SQLite do n8n ou arquivo em `data/`).
+Deduplicação: guardar hash/URL de cada notícia já processada (tabela `posts` no SQLite, única por perfil + URL).
 
 ## Etapas
 
@@ -29,7 +29,7 @@ Deduplicação: guardar hash/URL de cada notícia já processada (SQLite do n8n 
 }
 ```
 
-Regras de validação: manchete ≤ 8 palavras; reação ≤ ~450 caracteres para caber no card; legenda ≤ 2200 caracteres (limite do Instagram); `fonte` obrigatório; se `confianca = baixa`, marcar o post no Telegram com aviso.
+Regras de validação: manchete ≤ 10 palavras; reação pedida com ≤ 450 caracteres e aceita até 600, mas o card é conferido: se o texto estourar a área, o modelo é chamado de novo pedindo para encurtar (até 3 tentativas); legenda ≤ 2200 caracteres (limite do Instagram); `fonte` obrigatório; se `confianca = baixa`, marcar o post no Telegram com aviso.
 
 ## Estados de um post
 

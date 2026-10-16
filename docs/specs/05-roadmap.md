@@ -1,7 +1,7 @@
 # 05 · Roadmap
 
 ## Fase 0 · Fundação
-- Docker Compose com `ollama`, `n8n`, `render`, `extractor`.
+- Docker Compose com `ollama`, `app`, `public`, `cloudflared`.
 - Teste de saúde de cada serviço.
 - **Aceite:** `docker compose up` sobe tudo; Ollama responde um JSON válido.
 
@@ -23,8 +23,8 @@
 - Cron + RSS + deduplicação.
 - **Aceite:** 7 dias seguidos sem intervenção além do "Postar".
 
-## Fase 5 · Dashboard e multi-perfil
-- Ver spec 06. Depende de confirmar a troca do n8n por um app Python único.
+## Fase 5 · Dashboard e multi-perfil (v1 feita, falta validar com serviços reais)
+- Ver spec 06.
 - **Aceite:** criar o perfil do Iago pelo painel e gerar um post de teste.
 
 ## Fase 6 · Extras (opcionais)
@@ -47,4 +47,3 @@ Carrossel; imagem de fundo com ComfyUI; Reels; métricas de alcance.
 3. Qual subdomínio usar para as imagens (ex.: `img.seudominio.com`)? Ver `docs/cloudflare-tunnel.md`.
 4. Posts por dia (padrão no `.env.example`: 2).
 5. Iago e Igor serão adicionados como função no app da Meta? Cada um terá seu Telegram e contexto?
-6. Confirmar a troca do n8n por app Python único (spec 06).

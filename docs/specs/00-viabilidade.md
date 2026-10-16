@@ -6,7 +6,7 @@
 
 | Peça | Local? | Observação |
 |---|---|---|
-| Orquestração (n8n) | Sim | Docker |
+| Orquestração e painel (app Python) | Sim | Docker |
 | LLM (Ollama) | Sim | Depende da VRAM, ver abaixo |
 | Leitura de RSS | Sim | Só precisa de internet para buscar os feeds |
 | Extração do texto da matéria | Sim | Usar `trafilatura` ou Crawl4AI locais |

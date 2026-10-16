@@ -2,20 +2,27 @@
 
 Esteira local de conteúdo para Instagram: lê notícias, reage com a minha voz e contexto usando um LLM local, renderiza o post (HTML → JPEG), manda para aprovação no Telegram e publica pela Instagram Graph API oficial.
 
-> Status: specs prontas; serviço `tools` (extrair + renderizar card) implementado e testado; compose pronto. `/publish` implementado e testado contra um Graph API simulado (não contra a Meta real). Falta o workflow n8n e a ligação com o Telegram.
+> Status: app Python com painel web, pipeline completo (RSS → extração → LLM → card → aprovação → publicação), Telegram e agendador. **Testado ponta a ponta com serviços simulados (16 testes), ainda não contra a Meta, o Telegram e o Ollama reais.**
 
 ![exemplo do card](docs/exemplo-card.jpg)
 
-## Subir (quando o `.env` estiver preenchido)
+## Subir
 
 ```bash
-cp .env.example .env      # preencher
+cp .env.example .env      # preencher (APP_SECRET_KEY, ADMIN_PASSWORD, túnel, tokens)
 docker compose up -d --build
-docker exec -it $(docker compose ps -q ollama) ollama pull qwen2.5:7b-instruct
-curl localhost:8000/health
+docker compose exec ollama ollama pull qwen2.5:7b-instruct
 ```
 
-Pré-requisitos: Docker Desktop com WSL2 e GPU NVIDIA habilitada; um túnel nomeado na Cloudflare apontando para `http://public:80`.
+Abra http://localhost:8000, entre com a senha, vá em **Conexões** e teste Meta, Ollama, Telegram e URL pública. Só então ligue o perfil em **Perfis**. O perfil do Emerson nasce **desligado** de propósito.
+
+Pré-requisitos: Docker Desktop com WSL2 e GPU NVIDIA; túnel nomeado na Cloudflare apontando para `http://public:80` (veja `docs/cloudflare-tunnel.md`).
+
+## Testes
+
+```bash
+cd services/app && pip install -r requirements-dev.txt && python -m pytest
+```
 
 ## Specs
 

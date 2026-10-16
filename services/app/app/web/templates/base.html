@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}ic-ap{% endblock %}</title>
+<style>
+:root{--bg:#0e1116;--card:#161b22;--line:#252c36;--fg:#f3f1ea;--mut:#9aa3ad;--acc:#ff7a1a;--ok:#3fb950;--err:#f85149;--warn:#d29922}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 "Inter","Segoe UI",system-ui,sans-serif}
+a{color:var(--acc);text-decoration:none}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:14px 24px;border-bottom:1px solid var(--line);background:#0b0e13}
+.brand{font-weight:800;letter-spacing:-.5px}.brand i{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--acc);margin-right:8px}
+nav{display:flex;gap:4px;flex:1;flex-wrap:wrap}nav a{color:var(--mut);padding:6px 12px;border-radius:8px}nav a:hover,nav a.on{color:var(--fg);background:var(--card)}
+main{max-width:1060px;margin:0 auto;padding:28px 24px 80px}
+h1{font-size:26px;margin:0 0 4px;letter-spacing:-.5px}h2{font-size:17px;margin:28px 0 10px}.sub{color:var(--mut);margin:0 0 22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+.grid{display:grid;gap:16px}.post{display:grid;grid-template-columns:200px 1fr;gap:18px}
+@media(max-width:700px){.post{grid-template-columns:1fr}}
+.post img{width:100%;border-radius:10px;border:1px solid var(--line);display:block}
+label{display:block;color:var(--mut);font-size:13px;margin:12px 0 4px}
+input,select,textarea{width:100%;background:#0e1116;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:inherit}
+textarea{min-height:90px;resize:vertical}textarea.big{min-height:380px;font:13px/1.5 ui-monospace,Consolas,monospace}
+input[type=checkbox]{width:auto}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+button,.btn{background:var(--acc);color:#111;border:0;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer;font-size:14px;display:inline-block}
+button.sec{background:transparent;color:var(--fg);border:1px solid var(--line)}button.bad{background:transparent;color:var(--err);border:1px solid var(--line)}
+.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.acts form{margin:0}
+.badge{font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.badge.aguardando_aprovacao{color:var(--warn);border-color:var(--warn)}.badge.publicado{color:var(--ok);border-color:var(--ok)}
+.badge.falhou{color:var(--err);border-color:var(--err)}.badge.publicando,.badge.extraido,.badge.capturado{color:var(--acc);border-color:var(--acc)}
+.flash{padding:10px 14px;border-radius:10px;margin-bottom:12px;border:1px solid var(--line);background:var(--card)}
+.flash.erro{border-color:var(--err);color:var(--err)}.flash.aviso{border-color:var(--warn);color:var(--warn)}.flash.ok{border-color:var(--ok)}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mut);font-weight:500;font-size:13px}
+.mut{color:var(--mut)}.err{color:var(--err)}small{color:var(--mut)}
+.sw{display:flex;gap:8px;align-items:center}.sw select{width:auto}
+</style></head><body>
+{% if request.session.get('ok') %}
+<header>
+  <span class="brand"><i></i>ic-ap</span>
+  <nav>
+    <a href="/" class="{{ 'on' if request.url.path=='/' }}">Fila</a>
+    <a href="/perfis" class="{{ 'on' if request.url.path.startswith('/perfis') }}">Perfis</a>
+    <a href="/feeds" class="{{ 'on' if request.url.path=='/feeds' }}">Feeds</a>
+    <a href="/conexoes" class="{{ 'on' if request.url.path=='/conexoes' }}">Conexões</a>
+    <a href="/historico" class="{{ 'on' if request.url.path=='/historico' }}">Histórico</a>
+  </nav>
+  <form method="post" action="/perfil-atual" class="sw">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.url.path }}">
+    <span class="mut">Perfil:</span>
+    <select name="perfil_id" onchange="this.form.submit()">
+      {% for p in perfis %}<option value="{{ p.id }}" {{ 'selected' if p.id==perfil_id }}>{{ p.nome }}{{ '' if p.ativo else ' (desligado)' }}</option>{% endfor %}
+    </select>
+  </form>
+  <form method="post" action="/logout"><button class="sec" type="submit">Sair</button></form>
+</header>
+{% endif %}
+<main>
+  {% for tipo, msg in flashes %}<div class="flash {{ tipo }}">{{ msg }}</div>{% endfor %}
+  {% block body %}{% endblock %}
+</main></body></html>
