@@ -196,7 +196,8 @@ async def aprovar(post_id: int, origem: str = "painel") -> bool:
         if po["formato"] == "carrossel":
             media = await ig.publicar_carrossel(p["ig_user_id"], token, [f"{base}/{a}" for a in arqs], po["legenda"])
         else:
-            media = await ig.publicar(p["ig_user_id"], token, f"{base}/{arqs[0]}", po["legenda"], po["formato"])
+            media = await ig.publicar(p["ig_user_id"], token, f"{base}/{arqs[0]}", po["legenda"], po["formato"],
+                                      [m for m in (po["mencoes"] or "").split(",") if m])
         _set(post_id, "publicado", media_id=media, erro=None, agendado_para=None)
         db.log(p["id"], post_id, "publicado", f"{origem} media={media}")
         resultado = "✅ Publicado."
@@ -438,7 +439,7 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
         if overlay:
             Path(overlay).unlink(missing_ok=True)
     if formato == "story" and mencoes:
-        avisos.append("ℹ️ Menção no Story: aparece escrita na imagem. O Instagram não deixa apps criarem o adesivo clicável; se quiser, adicione o adesivo @menção no app antes de publicar.")
+        avisos.append("ℹ️ Menção: vai escrita na imagem e também como menção real pela API (a pessoa é notificada). Não dá para criar adesivos de link/enquete pela API.")
     legenda = ""
     if formato != "story":
         if not descricao:
@@ -450,10 +451,10 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
             falta = [m for m in mencoes if m.lower() not in legenda.lower()]
             if falta:
                 legenda += "\n\n" + " ".join(falta)
-    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,criado_em,atualizado_em)"
-               " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,mencoes,criado_em,atualizado_em)"
+               " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                (p["id"], "aguardando_aprovacao", (descricao or "Mídia do Telegram")[:120], "Telegram", descricao, texto_tela, legenda,
-                arquivo, formato, db.now(), db.now()))
+                arquivo, formato, ",".join(mencoes), db.now(), db.now()))
     db.log(p["id"], pid, "midia_recebida", f"{tipo} -> {formato}" + (" animado" if animado else "") +
            (f" musica={musica.name}" if musica else "") + (" texto" if texto_tela else ""))
     if p["telegram_chat_id"]:

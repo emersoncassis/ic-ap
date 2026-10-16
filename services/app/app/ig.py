@@ -1,4 +1,5 @@
 """Instagram Graph API (fluxo Facebook Login): publicar imagem e conferir a conta."""
+import json
 import asyncio
 
 import httpx
@@ -45,9 +46,15 @@ async def _esperar(c: httpx.AsyncClient, cid: str, token: str, video: bool = Fal
     raise MetaError("container não ficou pronto a tempo")
 
 
-async def publicar(ig_user_id: str, token: str, media_url: str, legenda: str, formato: str = "feed") -> str:
+def _user_tags(mencoes: list[str]) -> dict:
+    """Menções reais (notificam o usuário). Story, foto e vídeo aceitam user_tags; carrossel não (a menção vai na legenda)."""
+    nomes = [m.lstrip("@") for m in mencoes if m.strip("@")][:20]
+    return {"user_tags": json.dumps([{"username": n, "x": 0.5, "y": 0.78} for n in nomes])} if nomes else {}
+
+
+async def publicar(ig_user_id: str, token: str, media_url: str, legenda: str, formato: str = "feed", mencoes: list[str] | None = None) -> str:
     async with httpx.AsyncClient(timeout=60) as c:
-        cont = await _graph(c, "POST", f"{ig_user_id}/media", token, **_params_midia(media_url, legenda, formato))
+        cont = await _graph(c, "POST", f"{ig_user_id}/media", token, **_params_midia(media_url, legenda, formato), **_user_tags(mencoes or []))
         await _esperar(c, cont["id"], token, media_url.lower().endswith(".mp4"))
         pub = await _graph(c, "POST", f"{ig_user_id}/media_publish", token, creation_id=cont["id"])
     return pub["id"]
