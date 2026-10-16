@@ -2,7 +2,20 @@
 
 Esteira local de conteúdo para Instagram: lê notícias, reage com a minha voz e contexto usando um LLM local, renderiza o post (HTML → JPEG), manda para aprovação no Telegram e publica pela Instagram Graph API oficial.
 
-> Status: fase de especificação. Nenhum código ainda.
+> Status: specs prontas; serviço `tools` (extrair + renderizar card) implementado e testado; compose pronto. Falta o workflow n8n, a ligação com Telegram e o publish.
+
+![exemplo do card](docs/exemplo-card.jpg)
+
+## Subir (quando o `.env` estiver preenchido)
+
+```bash
+cp .env.example .env      # preencher
+docker compose up -d --build
+docker exec -it $(docker compose ps -q ollama) ollama pull qwen2.5:7b-instruct
+curl localhost:8000/health
+```
+
+Pré-requisitos: Docker Desktop com WSL2 e GPU NVIDIA habilitada; um túnel nomeado na Cloudflare apontando para `http://public:80`.
 
 ## Specs
 

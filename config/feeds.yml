@@ -1,0 +1,12 @@
+# Feeds RSS. URLs sugeridas, conferir se continuam ativas antes de usar.
+feeds:
+  - {nome: Tecnoblog, url: "https://tecnoblog.net/feed/", tema: tecnologia}
+  - {nome: Canaltech, url: "https://canaltech.com.br/rss/", tema: tecnologia}
+  - {nome: TechCrunch IA, url: "https://techcrunch.com/category/artificial-intelligence/feed/", tema: ia}
+  - {nome: The Verge, url: "https://www.theverge.com/rss/index.xml", tema: tecnologia}
+  - {nome: MIT Technology Review, url: "https://www.technologyreview.com/feed/", tema: ia}
+  - {nome: Exame, url: "https://exame.com/feed/", tema: negocios}
+  - {nome: STAT News, url: "https://www.statnews.com/feed/", tema: saude-tech}
+filtros:
+  palavras_chave: [IA, inteligência artificial, LLM, modelo, câmeras, segurança, cibersegurança, saúde digital, healthtech, empresa, startup]
+  max_idade_horas: 36

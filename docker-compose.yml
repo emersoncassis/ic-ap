@@ -1,0 +1,55 @@
+# Esteira local ic-ap. Requer Docker Desktop (WSL2) com suporte a GPU NVIDIA.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports: ["127.0.0.1:11434:11434"]
+    volumes: [ollama_models:/root/.ollama]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - {driver: nvidia, count: all, capabilities: [gpu]}
+
+  tools:
+    build: ./services/tools
+    restart: unless-stopped
+    env_file: .env
+    ports: ["127.0.0.1:8000:8000"]
+    volumes:
+      - ./templates:/app/templates:ro
+      - ./data:/data
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    restart: unless-stopped
+    ports: ["127.0.0.1:5678:5678"]
+    env_file: .env
+    environment:
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - TZ=America/Sao_Paulo
+      - N8N_SECURE_COOKIE=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./context:/context:ro
+      - ./config:/config:ro
+
+  # Serve só a pasta de imagens temporárias. É isto que o túnel expõe.
+  public:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./data/public:/usr/share/nginx/html:ro
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on: [public]
+
+volumes:
+  ollama_models:
+  n8n_data:

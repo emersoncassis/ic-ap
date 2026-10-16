@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<style>
+  :root{--bg:#0e1116;--fg:#f3f1ea;--mut:#9aa3ad;--acc:#ff7a1a}
+  *{box-sizing:border-box;margin:0}
+  html,body{width:1080px;height:1350px;background:var(--bg);color:var(--fg);
+    font-family:"Inter","Segoe UI","Helvetica Neue",Arial,sans-serif}
+  .card{width:1080px;height:1350px;padding:84px 84px 72px;display:flex;flex-direction:column}
+  .top{display:flex;align-items:center;gap:20px;color:var(--mut);font-size:30px}
+  .dot{width:16px;height:16px;border-radius:50%;background:var(--acc)}
+  .top b{color:var(--fg);font-weight:700}
+  h1{margin-top:72px;font-size:84px;line-height:1.04;letter-spacing:-1.5px;font-weight:800}
+  .rule{width:120px;height:8px;background:var(--acc);margin:48px 0}
+  .body{flex:1;overflow:hidden;font-size:42px;line-height:1.38;color:#e4e1d8}
+  .body p+p{margin-top:26px}
+  .foot{display:flex;justify-content:space-between;border-top:2px solid #232a33;padding-top:30px;
+    font-size:28px;color:var(--mut)}
+</style></head>
+<body><div class="card">
+  <div class="top"><span class="dot"></span><b>{{ nome }}</b><span>{{ handle }}</span></div>
+  <h1>{{ manchete }}</h1>
+  <div class="rule"></div>
+  <div class="body">{% for p in paragrafos %}<p>{{ p }}</p>{% endfor %}</div>
+  <div class="foot"><span>Fonte: {{ fonte }}</span><span>{{ handle }}</span></div>
+</div></body></html>

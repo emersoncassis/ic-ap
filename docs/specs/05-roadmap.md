@@ -30,14 +30,14 @@ Carrossel; imagem de fundo com ComfyUI; Reels; métricas de alcance.
 
 - Hardware: RTX 5070 8 GB de VRAM + Core Ultra 7. LLM local ~7–8B, com provedor de nuvem configurável como reserva.
 - Perfil: pessoal. Contexto vem do site pessoal (emerson.ysafe.com.br); rascunho em `context/meu_contexto.md`.
+- URL pública: Cloudflare Tunnel, máquina sempre ligada.
+- RAM: 32 GB (DDR5).
+- Feeds: tecnologia, empresa/negócios, IA e saúde tech (`config/feeds.yml`, a validar).
 - Credenciais Meta: app, ID da conta e token já existem.
 
 ## Perguntas em aberto
 
-1. Quanta RAM tem o notebook?
-2. Colar 3 a 5 textos/legendas seus para o contexto.
-3. O app Meta usa Instagram Login ou Facebook Login? O token é curto ou longo?
-4. URL pública: R2 ou Cloudflare Tunnel?
-5. Quais temas e feeds RSS de notícias?
-6. Frequência: quantos posts por dia?
-7. O PC fica ligado no horário de postagem?
+1. Colar 3 a 5 textos/legendas seus para o contexto.
+2. Qual fluxo de login o app Meta usa? Você entrou pelo Meta Business, então confira no painel do app (Casos de uso / Produtos) se o produto é "API do Instagram com login do Instagram" ou com "login do Facebook", e se o token é curto ou longo. Define `IG_API_HOST`.
+3. Qual domínio vai no túnel Cloudflare (ex.: `img.seudominio.com`)? Precisa de domínio na Cloudflare.
+4. Posts por dia (padrão no `.env.example`: 2).
