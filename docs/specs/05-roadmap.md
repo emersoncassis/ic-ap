@@ -26,12 +26,18 @@
 ## Fase 5 · Extras (opcionais)
 Carrossel; imagem de fundo com ComfyUI; Reels; métricas de alcance.
 
+## Decisões já tomadas
+
+- Hardware: RTX 5070 + Core Ultra 7 (VRAM a confirmar, assumido 8 GB). LLM local ~7–8B, com provedor de nuvem configurável como reserva.
+- Perfil: pessoal. Contexto vem do site pessoal.
+- Credenciais Meta: app, ID da conta e token já existem.
+
 ## Perguntas em aberto
 
-1. Qual GPU e quanta RAM/VRAM tem o PC que vai rodar isso? Define o modelo.
-2. O PC fica ligado no horário de postagem?
-3. Qual perfil do Instagram será usado (pessoal, IC TEAM)? Já é Profissional?
-4. O app Meta atual usa Instagram Login ou Facebook Login?
-5. URL pública: R2 ou Cloudflare Tunnel?
-6. Quais feeds RSS de notícias, e em quais temas?
-7. Frequência: quantos posts por dia?
+1. URL do site pessoal (fonte do contexto).
+2. `nvidia-smi` mostra 8 GB ou 12 GB de VRAM? Quanta RAM?
+3. O app Meta usa Instagram Login ou Facebook Login? O token é curto ou longo?
+4. URL pública: R2 ou Cloudflare Tunnel?
+5. Quais temas e feeds RSS de notícias?
+6. Frequência: quantos posts por dia?
+7. O PC fica ligado no horário de postagem?

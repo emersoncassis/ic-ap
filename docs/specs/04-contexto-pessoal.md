@@ -38,8 +38,12 @@ Arquivo Markdown injetado como *system prompt* do modelo. Começar assim; só ev
 - Português do Brasil
 ```
 
+## Fonte do conteúdo: site pessoal
+
+A história, trajetória e posicionamento já estão no site pessoal do Emerson. Fluxo: um script de importação baixa as páginas do site (extractor), e o `meu_contexto.md` é montado a partir delas (rascunho gerado por LLM, revisado por você). O perfil do Instagram é pessoal, então o tom é primeira pessoa. Regenerar o rascunho quando o site mudar.
+
 ## Pendente de você
 
-Preencher "Quem eu sou", temas, crenças, tom e pelo menos 3 exemplos reais seus. É isso que mais determina se o post soa como você ou como robô.
+Informar a URL do site. Depois revisar o rascunho: temas, tom, o que você critica e pelo menos 3 exemplos reais de textos seus (legendas antigas servem). É isso que mais determina se o post soa como você ou como robô.
 
 Temas candidatos, a confirmar: inteligência artificial; segurança eletrônica e videomonitoramento; IC TEAM e a saúde como ativo de empresas e empresários.

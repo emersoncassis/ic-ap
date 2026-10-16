@@ -49,9 +49,13 @@ ic-ap/
 └── data/                     # gitignored: jpgs gerados, logs, histórico
 ```
 
+## Provedor de LLM (configurável)
+
+`LLM_PROVIDER=ollama|gemini|anthropic` no `.env`. A etapa de reação chama uma interface única (entrada: contexto + texto da notícia; saída: o JSON da spec 02). Padrão `ollama`. Cloud é reserva para quando o modelo local não segurar o tom ou o JSON. Só o texto da notícia e o contexto público vão para a nuvem.
+
 ## Segredos
 
-`.env` fora do git: `IG_USER_ID`, `IG_ACCESS_TOKEN`, `META_APP_ID`, `META_APP_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, credenciais R2. Fornecer `.env.example` sem valores.
+`.env` fora do git: `LLM_PROVIDER`, `GEMINI_API_KEY`/`ANTHROPIC_API_KEY` (só se usar nuvem), `IG_USER_ID`, `IG_ACCESS_TOKEN`, `META_APP_ID`, `META_APP_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, credenciais R2. Fornecer `.env.example` sem valores.
 
 ## Não-objetivos da v1
 

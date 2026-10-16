@@ -17,6 +17,13 @@
 
 **Recomendação:** usar o fluxo que o seu app atual já tem configurado. Se ainda não definiu, Instagram Login é mais simples.
 
+## Estado atual do seu app
+
+Você já tem o app criado no Meta Developers, o ID da conta Instagram e um token. A conferir antes de implementar:
+- Qual produto o app usa (Instagram Login ou Facebook Login) e se a permissão de publicação foi concedida.
+- Se o token é de curta duração (~1 h) ou longo (~60 dias). Se for curto, o primeiro passo é trocá-lo por um longo.
+- O token vai só no `.env`. Não colar em chat nem commitar.
+
 ## Chamadas (post de imagem única)
 
 1. `POST /{IG_ID}/media` com `image_url` (URL pública do JPEG) e `caption` → devolve `creation_id`.
