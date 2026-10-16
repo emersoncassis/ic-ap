@@ -9,6 +9,7 @@ def env(k: str, d: str = "") -> str:
 
 DATA = Path(env("DATA_DIR", "/data"))
 PUBLIC = DATA / "public"      # servido na porta interna PUBLIC_PORT (e exposto só pelo túnel), apenas no momento do publish
+MUSICAS = DATA / "musicas"
 CARDS = DATA / "cards"        # cards privados (preview no painel)
 DB_PATH = DATA / "app.db"
 SECRET_FILE = DATA / "secret.key"

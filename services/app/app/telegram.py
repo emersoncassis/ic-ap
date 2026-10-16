@@ -29,10 +29,23 @@ async def enviar_card(chat_id: str, arquivo, post_id: int, legenda: str, aviso: 
         {"text": "🔄 Refazer", "callback_data": f"rf:{post_id}"},
         {"text": "🗑 Descartar", "callback_data": f"ds:{post_id}"}]]}
     cap = (f"{aviso}\n\n" if aviso else "") + legenda
+    video = str(arquivo).endswith(".mp4")
     with open(arquivo, "rb") as f:
-        res = await _call("sendPhoto", data={"chat_id": chat_id, "caption": cap[:1024],
-                                             "reply_markup": json.dumps(teclado)}, files={"photo": f})
+        res = await _call("sendVideo" if video else "sendPhoto",
+                          data={"chat_id": chat_id, "caption": cap[:1024], "reply_markup": json.dumps(teclado)},
+                          files={"video" if video else "photo": f})
     return str(res["message_id"])
+
+
+MAX_DOWNLOAD = 20 * 1024 * 1024  # limite do getFile na API padrão de bots
+
+
+async def baixar(file_id: str, destino) -> None:
+    info = await _call("getFile", data={"file_id": file_id})
+    async with httpx.AsyncClient(timeout=300) as c:
+        r = await c.get(f"{C.TELEGRAM_API}/file/bot{settings.telegram_token()}/{info['file_path']}")
+        r.raise_for_status()
+    destino.write_bytes(r.content)
 
 
 async def avisar(chat_id: str, texto: str) -> None:
@@ -52,16 +65,19 @@ async def marcar(chat_id: str, message_id: str, texto: str) -> None:
         pass
 
 
-async def poll(on_acao) -> None:
-    """on_acao(acao, post_id, chat_id) é async. Roda até ser cancelada."""
+async def poll(on_acao, on_msg=None) -> None:
+    """on_acao(acao, post_id, chat_id) e on_msg(mensagem) são async. Roda até ser cancelada."""
     offset = 0
     while True:
         try:
             async with httpx.AsyncClient(timeout=45) as c:
                 r = await c.post(_url("getUpdates"), data={"timeout": 25, "offset": offset,
-                                                           "allowed_updates": json.dumps(["callback_query"])})
+                                                           "allowed_updates": json.dumps(["callback_query", "message"])})
             for u in r.json().get("result", []):
                 offset = u["update_id"] + 1
+                if u.get("message") and on_msg:
+                    asyncio.create_task(on_msg(u["message"]))
+                    continue
                 cq = u.get("callback_query")
                 if not cq or ":" not in cq.get("data", ""):
                     continue

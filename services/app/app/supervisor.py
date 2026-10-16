@@ -17,7 +17,7 @@ async def loop() -> None:
                         tg_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError, Exception):
                             await tg_task
-                    tg_task = asyncio.create_task(telegram.poll(pipeline.acao_telegram)) if t else None
+                    tg_task = asyncio.create_task(telegram.poll(pipeline.acao_telegram, pipeline.mensagem_telegram)) if t else None
                     tg_token = t
 
                 tk = settings.tunnel_token()

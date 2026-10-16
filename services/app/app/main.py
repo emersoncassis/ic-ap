@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import config as C, crypto, db, ig, llm, pipeline, publico, render, scheduler, seed, settings, supervisor, telegram
+from . import config as C, crypto, db, ig, llm, midia, pipeline, publico, render, scheduler, seed, settings, supervisor, telegram
 from .tunnel import tunel
 
 WEB = Path(__file__).parent / "web"
@@ -294,6 +294,51 @@ def card(request: Request, nome: str):
     return FileResponse(C.CARDS / nome, media_type="video/mp4" if nome.endswith(".mp4") else "image/jpeg")
 
 
+
+# ---------- músicas (trilhas livres de direitos para os vídeos) ----------
+MAX_MUSICA = 30 * 1024 * 1024
+
+
+@app.get("/musicas")
+def musicas_page(request: Request):
+    logado(request)
+    return render_page(request, "musicas.html", lista=[{"nome": p.name, "mb": round(p.stat().st_size / 1048576, 1)} for p in midia.musicas()])
+
+
+@app.post("/musicas")
+async def musicas_enviar(request: Request):
+    logado(request)
+    dados = await request.form()
+    if not secrets.compare_digest(str(dados.get("csrf", "")), request.session.get("csrf", "x")):
+        raise HTTPException(403, "csrf")
+    ok = 0
+    for arq in dados.getlist("arquivo"):
+        nome = midia.nome_seguro(getattr(arq, "filename", "") or "")
+        if not nome.lower().endswith(midia.EXT_MUSICA):
+            flash(request, f"{nome or 'arquivo'}: formato não aceito (use mp3, m4a, wav, ogg ou aac).", "erro")
+            continue
+        conteudo = await arq.read()
+        if len(conteudo) > MAX_MUSICA:
+            flash(request, f"{nome}: maior que 30 MB.", "erro")
+            continue
+        C.MUSICAS.mkdir(parents=True, exist_ok=True)
+        (C.MUSICAS / nome).write_bytes(conteudo)
+        ok += 1
+    if ok:
+        flash(request, f"{ok} música(s) adicionada(s).")
+    return voltar(request, "/musicas")
+
+
+@app.post("/musicas/remover")
+async def musicas_remover(request: Request):
+    logado(request)
+    f = await form(request)
+    alvo = C.MUSICAS / midia.nome_seguro(f.get("nome", ""))
+    if alvo.parent == C.MUSICAS and alvo.exists():
+        alvo.unlink()
+        flash(request, "Música removida.")
+    return voltar(request, "/musicas")
+
 # ---------- perfis ----------
 @app.get("/perfis")
 def perfis_page(request: Request):
@@ -345,11 +390,12 @@ async def perfil_salvar(request: Request, pid: int):
     horarios = ",".join(h.strip() for h in f.get("horarios", "").split(",") if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", h.strip()))
     con = int(f["llm_conexao_id"]) if str(f.get("llm_conexao_id", "")).isdigit() else None
     db.x("UPDATE perfis SET nome=?,handle=?,ativo=?,ig_user_id=?,telegram_chat_id=?,llm_conexao_id=?,"
-         "contexto_md=?,horarios=?,palavras_chave=?,max_idade_horas=? WHERE id=?",
+         "contexto_md=?,horarios=?,palavras_chave=?,max_idade_horas=?,musica_modo=? WHERE id=?",
          (f.get("nome", "").strip() or "Sem nome", f.get("handle", "").strip(), 1 if f.get("ativo") else 0,
           f.get("ig_user_id", "").strip(), f.get("telegram_chat_id", "").strip(), con,
           f.get("contexto_md", ""), horarios, f.get("palavras_chave", "").strip(),
-          max(1, min(int(f.get("max_idade_horas") or 36), 720)), pid))
+          max(1, min(int(f.get("max_idade_horas") or 36), 720)),
+          "aleatoria" if f.get("musica_modo") == "aleatoria" else "nenhuma", pid))
     if f.get("ig_token", "").strip():
         db.x("UPDATE perfis SET ig_token_enc=? WHERE id=?", (crypto.enc(f["ig_token"].strip()), pid))
     db.log(pid, None, "perfil_salvo")

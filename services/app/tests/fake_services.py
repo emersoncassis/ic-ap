@@ -1,5 +1,6 @@
 """Serviços simulados: RSS + artigos, Ollama, Graph API da Meta, Telegram e o 'nginx' público."""
 import asyncio, json, os
+from pathlib import Path
 from datetime import datetime, timezone
 from email.utils import format_datetime
 
@@ -26,6 +27,26 @@ def make(port: int) -> FastAPI:
     async def _set(request: Request):
         st.update(await request.json())
         return {}
+
+    @app.post("/_tg/push_msg")
+    async def tg_push_msg(request: Request):
+        st["uid"] += 1
+        b = await request.json()
+        m = {"message_id": st["uid"], "chat": {"id": b["chat_id"]}}
+        if b.get("caption"):
+            m["caption"] = b["caption"]
+        if b.get("tipo") == "foto":
+            m["photo"] = [{"file_id": "foto.jpg", "file_size": 1000}, {"file_id": "foto.jpg", "file_size": b.get("size", 5000)}]
+        elif b.get("tipo") == "video":
+            m["video"] = {"file_id": b.get("arquivo", "video.mp4"), "file_size": b.get("size", 5000)}
+        elif b.get("tipo") == "texto":
+            m["text"] = b["caption"]
+        st["tg_updates"].append({"update_id": st["uid"], "message": m})
+        return {}
+
+    @app.get("/file/bot{token}/files/{nome}")
+    def tg_file(token: str, nome: str):
+        return Response((Path(os.environ["FAKE_MEDIA_DIR"]) / nome).read_bytes())
 
     @app.post("/_tg/push")
     async def tg_push(request: Request):
@@ -178,6 +199,8 @@ def make(port: int) -> FastAPI:
             out, st["tg_updates"] = st["tg_updates"], []
             return {"ok": True, "result": out}
         form = await request.form()
+        if metodo == "getFile":
+            return {"ok": True, "result": {"file_path": f"files/{form['file_id']}"}}
         st["tg"].append([metodo, {k: (v if isinstance(v, str) else "<arquivo>") for k, v in form.items()}])
         return {"ok": True, "result": {"message_id": 555}}
 

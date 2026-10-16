@@ -31,6 +31,7 @@
     <div class="row">
       <div><label>Horários (HH:MM, separados por vírgula)</label><input name="horarios" value="{{ p.horarios }}"></div>
       <div><label>Notícias das últimas (horas)</label><input type="number" name="max_idade_horas" value="{{ p.max_idade_horas }}"></div>
+      <div><label>Música nos vídeos do Telegram</label><select name="musica_modo"><option value="nenhuma" {{ 'selected' if p.musica_modo!='aleatoria' }}>Sem música</option><option value="aleatoria" {{ 'selected' if p.musica_modo=='aleatoria' }}>Automática (aleatória, da aba Músicas)</option></select></div>
     </div>
     <label>Palavras-chave (vazio = aceita tudo)</label><input name="palavras_chave" value="{{ p.palavras_chave }}">
   </div>

@@ -25,10 +25,19 @@ filtros:
 # cloudflared de mentira: imprime o log de "conectado" e o token (para provar que o app mascara)
 (TMP / "cloudflared").write_text('#!/bin/sh\necho "INF Registered tunnel connection connIndex=0 token=$TUNNEL_TOKEN"\nexec sleep 600\n')
 (TMP / "cloudflared").chmod(0o755)
+# mídias de teste geradas com ffmpeg (o que o "usuário" manda pelo Telegram)
+MEDIA = TMP / "media"; MEDIA.mkdir()
+def _ff(*a):
+    import subprocess; subprocess.run(["ffmpeg", "-y", "-v", "error", *a], check=True)
+_ff("-f", "lavfi", "-i", "testsrc=size=800x600:rate=1", "-frames:v", "1", str(MEDIA / "foto.jpg"))
+_ff("-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:duration=3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(MEDIA / "video.mp4"))
+_ff("-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:duration=2", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(MEDIA / "mudo.mp4"))
+_ff("-f", "lavfi", "-i", "sine=frequency=220:duration=2", "-c:a", "libmp3lame", str(MEDIA / "trilha.mp3"))
 chrome = glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome")
 # Nenhuma configuração de usuário via ambiente: só caminhos e endereços de serviços simulados.
 os.environ.update({
-    "DATA_DIR": str(TMP / "data"), "TEMPLATES_DIR": str(REPO / "templates"),
+    "DATA_DIR": str(TMP / "data"), "FAKE_MEDIA_DIR": str(MEDIA), "TEMPLATES_DIR": str(REPO / "templates"),
     "CONTEXT_FILE": str(REPO / "context" / "meu_contexto.md"), "FEEDS_FILE": str(TMP / "feeds.yml"),
     "PUBLIC_PORT": str(PUBLIC_PORT), "CLOUDFLARED_BIN": str(TMP / "cloudflared"),
     "IG_GRAPH_BASE": f"{FAKE}/graph", "IG_POLL_SECONDS": "0.1", "SCHEDULER_TICK": "1", "TELEGRAM_API_BASE": FAKE,
@@ -65,6 +74,7 @@ def fake():
     class F:
         def st(self): return httpx.get(f"{FAKE}/_st").json()
         def set(self, **kw): httpx.post(f"{FAKE}/_set", json=kw)
+        def push_msg(self, chat_id, tipo, caption='', **kw): httpx.post(f"{FAKE}/_tg/push_msg", json={"chat_id": chat_id, "tipo": tipo, "caption": caption, **kw})
         def push(self, data, chat_id): httpx.post(f"{FAKE}/_tg/push", json={"data": data, "chat_id": chat_id})
     return F()
 

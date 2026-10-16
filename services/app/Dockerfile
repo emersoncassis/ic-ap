@@ -1,5 +1,6 @@
 FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 ADD https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${TARGETARCH} /usr/local/bin/cloudflared
 RUN chmod +x /usr/local/bin/cloudflared
 WORKDIR /srv

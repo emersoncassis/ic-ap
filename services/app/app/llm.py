@@ -97,7 +97,8 @@ async def listar_modelos(tipo: str, base_url: str, key: str) -> tuple[list[str],
 
 
 # ---------- chamada ao modelo ----------
-async def _chat(con: dict, system: str, user: str, temperature: float) -> str:
+async def _chat(con: dict, system: str, user: str, temperature: float, schema: dict | None = None) -> str:
+    schema = schema or SCHEMA
     tipo, modelo, base, key = con["tipo"], con["modelo"], con["base_url"].rstrip("/"), con.get("api_key", "")
     if not modelo:
         raise LLMError("a conexão não tem modelo escolhido")
@@ -108,14 +109,14 @@ async def _chat(con: dict, system: str, user: str, temperature: float) -> str:
                 hdr = {"Authorization": f"Bearer {key}"} if key else {}
                 corpo = {"model": modelo, "messages": msgs, "temperature": temperature, "stream": False}
                 r = await c.post(f"{base}/chat/completions", headers=hdr, json={
-                    **corpo, "response_format": {"type": "json_schema", "json_schema": {"name": "reacao", "schema": SCHEMA, "strict": True}}})
+                    **corpo, "response_format": {"type": "json_schema", "json_schema": {"name": "reacao", "schema": schema, "strict": True}}})
                 if r.status_code == 400:  # servidor sem suporte a response_format: confia no prompt
                     r = await c.post(f"{base}/chat/completions", headers=hdr, json=corpo)
                 r.raise_for_status()
                 return r.json()["choices"][0]["message"]["content"]
             if tipo == "ollama":
                 r = await c.post(f"{base}/api/chat", json={
-                    "model": modelo, "stream": False, "format": SCHEMA, "messages": msgs,
+                    "model": modelo, "stream": False, "format": schema, "messages": msgs,
                     "options": {"temperature": temperature, "num_ctx": 8192}})
                 r.raise_for_status()
                 return r.json()["message"]["content"]
@@ -210,3 +211,25 @@ async def testar(con: dict) -> dict:
         except ValueError as e:
             ultimo = str(e)
     return {"ok": False, "segundos": round(time.time() - t0, 1), "erro": f"o modelo respondeu, mas fora do formato: {ultimo}"}
+
+
+SCHEMA_LEGENDA = {"type": "object", "properties": {"legenda_instagram": {"type": "string"}}, "required": ["legenda_instagram"]}
+
+
+async def legenda_midia(con: dict, contexto: str, descricao: str, tipo: str, temperature: float = 0.8) -> str:
+    """Legenda para uma foto/vídeo do próprio autor, a partir da frase de contexto que ele mandou."""
+    system = (f"{contexto.strip()}\n\n---\nVocê escreve a legenda de Instagram de um(a) {tipo} do próprio autor, em primeira pessoa, "
+              "no tom dele. Use só o que ele contou; não invente fatos. Máximo 600 caracteres, termine com 3 a 5 hashtags. "
+              'Responda SOMENTE com JSON: {"legenda_instagram": "..."}')
+    ultimo = ""
+    for _ in range(3):
+        user = f"O que ele contou sobre o {tipo}: {descricao}" + (f"\n\nA resposta anterior foi rejeitada: {ultimo}." if ultimo else "")
+        try:
+            d = parse(await _chat(con, system, user, temperature, SCHEMA_LEGENDA))
+            leg = d.get("legenda_instagram")
+            if isinstance(leg, str) and leg.strip() and len(leg) <= 2200:
+                return leg.strip()
+            ultimo = "legenda_instagram ausente, vazia ou longa demais"
+        except ValueError as e:
+            ultimo = str(e)
+    raise ValueError(f"o modelo não entregou uma legenda válida ({ultimo})")

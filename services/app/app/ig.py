@@ -37,7 +37,8 @@ async def publicar(ig_user_id: str, token: str, media_url: str, legenda: str, fo
     async with httpx.AsyncClient(timeout=60) as c:
         cont = await _graph(c, "POST", f"{ig_user_id}/media", token, **_params_midia(media_url, legenda, formato))
         cid = cont["id"]
-        for _ in range(C.IG_POLL_TRIES):
+        tentativas = C.IG_POLL_TRIES * (10 if media_url.lower().endswith('.mp4') else 1)  # vídeo demora mais
+        for _ in range(tentativas):
             st = (await _graph(c, "GET", cid, token, fields="status_code")).get("status_code")
             if st == "FINISHED":
                 break

@@ -464,3 +464,131 @@ def test_migracao_de_banco_antigo(tmp_path):
         velho.execute("INSERT INTO posts(perfil_id,estado,noticia_url,variacao) VALUES(1,'rascunho','http://x',2)")  # mesma notícia, outra versão
     finally:
         db._conn = original
+
+
+# ---------------- foto e vídeo enviados pelo Telegram ----------------
+def _probe(path):
+    import json, subprocess
+    d = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)],
+                                  capture_output=True, text=True, check=True).stdout)
+    v = next(s for s in d["streams"] if s["codec_type"] == "video")
+    return {"w": v["width"], "h": v["height"], "audio": any(s["codec_type"] == "audio" for s in d["streams"]),
+            "dur": float(d["format"]["duration"]), "vcodec": v["codec_name"]}
+
+
+def _novo_post(antes):
+    return esperar(lambda: (lambda r: r[0] if len(r) > antes else None)(db.q("SELECT * FROM posts WHERE fonte='Telegram' ORDER BY id DESC")))
+
+
+def _n_midia():
+    return len(db.q("SELECT 1 FROM posts WHERE fonte='Telegram'"))
+
+
+def test_foto_do_telegram_vira_post_de_feed(logado, fake):
+    configurar_perfil(logado)
+    n = _n_midia()
+    fake.push_msg(42, "foto", "Treino de hoje cedo, 5 km sem parar")
+    p = _novo_post(n)
+    assert p["formato"] == "feed" and p["estado"] == "aguardando_aprovacao" and p["noticia_url"] is None
+    assert jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350), "800x600 cortado para 4:5"
+    assert p["legenda"].startswith("Minha leitura") and "Treino de hoje" in fake.st()["llm_users"][-1]
+    esperar(lambda: any(m == "sendPhoto" and "[FEED]" in d["caption"] and d["chat_id"] == "42" for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/aprovar")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
+    media = next(d for t, d in fake.st()["graph"] if t == "media")
+    assert media["image_url"].endswith(p["arquivo"]) and media["caption"] == p["legenda"] and "media_type" not in media
+
+
+def test_foto_com_palavra_story_nao_gera_legenda(logado, fake):
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story: bastidores")
+    p = _novo_post(n)
+    assert p["formato"] == "story" and p["legenda"] == "" and jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1920)
+    assert not fake.st()["llm_users"], "Story não tem legenda: não chama o LLM"
+    post_form(logado, f"/posts/{p['id']}/aprovar")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
+    media = next(d for t, d in fake.st()["graph"] if t == "media")
+    assert media["media_type"] == "STORIES" and "caption" not in media
+
+
+def test_video_vira_reel_vertical_com_audio_original(logado, fake):
+    n = _n_midia()
+    fake.push_msg(42, "video", "Palestra sobre IA na saúde")
+    p = _novo_post(n)
+    assert p["formato"] == "reel" and p["arquivo"].endswith(".mp4")
+    info = _probe(C.CARDS / p["arquivo"])
+    assert (info["w"], info["h"], info["vcodec"]) == (1080, 1920, "h264") and info["audio"] and 2 < info["dur"] < 4
+    esperar(lambda: any(m == "sendVideo" and "[REEL]" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/aprovar")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
+    media = next(d for t, d in fake.st()["graph"] if t == "media")
+    assert media["media_type"] == "REELS" and media["video_url"].endswith(".mp4") and media["share_to_feed"] == "true"
+    assert not (C.PUBLIC / p["arquivo"]).exists()
+
+
+def test_musicas_envio_validacao_e_remocao(logado):
+    dados = {"csrf": csrf_de(logado, "/musicas")}
+    import os
+    trilha = open(os.environ["FAKE_MEDIA_DIR"] + "/trilha.mp3", "rb").read()
+    r = logado.post("/musicas", data=dados, files=[("arquivo", ("../../trilha.mp3", trilha, "audio/mpeg")),
+                                                   ("arquivo", ("virus.exe", b"MZ", "application/octet-stream"))])
+    assert r.status_code == 303
+    html = ver(logado, "/musicas")
+    assert "trilha.mp3" in html and "formato não aceito" in html
+    assert (C.MUSICAS / "trilha.mp3").exists() and not (C.MUSICAS.parent / "trilha.mp3").exists(), "sem escapar da pasta"
+    assert not (C.MUSICAS / "virus.exe").exists()
+
+
+def test_video_com_musica_automatica(logado, fake):
+    db.x("UPDATE perfis SET musica_modo='aleatoria' WHERE id=1")
+    n = _n_midia()
+    fake.push_msg(42, "video", "Dia de gravação", arquivo="mudo.mp4")
+    p = _novo_post(n)
+    info = _probe(C.CARDS / p["arquivo"])
+    assert info["audio"], "vídeo mudo ganhou a trilha"
+    assert "trilha: trilha" in " ".join(d.get("caption", "") for m, d in fake.st()["tg"] if m == "sendVideo") or esperar(
+        lambda: any("trilha: trilha" in d.get("caption", "") for m, d in fake.st()["tg"] if m == "sendVideo"))
+    # com áudio original, a trilha entra por baixo e o vídeo continua com som
+    n = _n_midia()
+    fake.push_msg(42, "video", "Com som original")
+    p2 = _novo_post(n)
+    assert _probe(C.CARDS / p2["arquivo"])["audio"]
+    # "sem música" respeita o pedido
+    n = _n_midia()
+    fake.push_msg(42, "video", "sem música: bastidor", arquivo="mudo.mp4")
+    p3 = _novo_post(n)
+    assert not _probe(C.CARDS / p3["arquivo"])["audio"]
+    db.x("UPDATE perfis SET musica_modo='nenhuma' WHERE id=1")
+    for x in (p, p2, p3):
+        post_form(logado, f"/posts/{x['id']}/descartar")
+
+
+def test_midia_sem_frase_e_refazer_legenda(logado, fake):
+    n = _n_midia()
+    fake.push_msg(42, "foto", "")
+    p = _novo_post(n)
+    assert p["legenda"] == ""
+    esperar(lambda: any(m == "sendPhoto" and "Sem frase de contexto" in d["caption"] for m, d in fake.st()["tg"]))
+    # com frase: "refazer" só troca a legenda
+    db.x("UPDATE posts SET texto='Evento de IA em Floripa' WHERE id=?", (p["id"],))
+    post_form(logado, f"/posts/{p['id']}/refazer")
+    novo = esperar(lambda: (lambda r: r if r["legenda"] else None)(pipeline.post(p["id"])))
+    assert novo["arquivo"] == p["arquivo"] and (C.CARDS / p["arquivo"]).exists() and "Evento de IA" in fake.st()["llm_users"][-1]
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_telegram_midia_so_do_dono_texto_e_limite(logado, fake):
+    n = _n_midia()
+    fake.push_msg(999, "foto", "intruso")
+    fake.push_msg(42, "foto", "grande demais", size=25 * 1024 * 1024)
+    fake.push_msg(42, "texto", "oi")
+    esperar(lambda: any(m == "sendMessage" and "20 MB" in d["text"] for m, d in fake.st()["tg"]))
+    esperar(lambda: any(m == "sendMessage" and "Mande uma foto" in d["text"] for m, d in fake.st()["tg"]))
+    assert _n_midia() == n and not any(d.get("chat_id") == "999" for m, d in fake.st()["tg"])
+
+
+def test_destino_por_palavras():
+    assert pipeline._destino("foto", "Story: treino") == ("story", "treino", False)
+    assert pipeline._destino("video", "meu reel de hoje") == ("reel", "meu de hoje", False)
+    assert pipeline._destino("video", "feed sem música") == ("reel", "", True)
+    assert pipeline._destino("foto", "sem história")[0] == "feed"

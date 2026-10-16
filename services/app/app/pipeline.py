@@ -3,7 +3,7 @@ import asyncio, json, re, shutil, sqlite3
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import config as C, crypto, db, feeds, ig, llm, render, settings, telegram
+from . import config as C, crypto, db, feeds, ig, llm, midia, render, settings, telegram
 
 RUNNING: set[int] = set()
 MAX_FALHAS = 3
@@ -137,6 +137,8 @@ async def _processar(post_id: int, p: dict, temperature: float, destino: str = "
 
 async def refazer(post_id: int) -> bool:
     po = post(post_id)
+    if po and not po["noticia_url"]:  # mídia enviada por você: só a legenda muda
+        return await _refazer_legenda(po)
     if not po or not _claim(post_id, ESTADOS_ABERTOS, "extraido"):
         return False
     old = po["arquivo"]
@@ -302,3 +304,110 @@ async def publicar_agendados() -> int:
     for r in vencidos:
         asyncio.create_task(aprovar(r["id"], "agenda"))
     return len(vencidos)
+
+
+# ---------------- foto/vídeo enviados pelo Telegram ----------------
+AJUDA = ("Mande uma foto ou um vídeo com uma frase de contexto na legenda. Eu ajusto o formato, escrevo a legenda no seu tom "
+         "e devolvo aqui para aprovar.\nPalavras que mudam o destino: story, reel, feed, “sem música”.")
+
+
+async def _refazer_legenda(po: dict) -> bool:
+    p = perfil(po["perfil_id"])
+    if po["estado"] not in ESTADOS_ABERTOS or po["formato"] == "story" or not po["texto"]:
+        return False
+    con = conexao_do_perfil(p)
+    try:
+        leg = await llm.legenda_midia(con, p["contexto_md"], po["texto"], "vídeo" if po["arquivo"].endswith(".mp4") else "foto", 0.95)
+    except Exception as e:
+        db.log(p["id"], po["id"], "falhou_legenda", str(e))
+        return False
+    db.x("UPDATE posts SET legenda=?, atualizado_em=? WHERE id=?", (leg, db.now(), po["id"]))
+    db.log(p["id"], po["id"], "legenda_refeita")
+    if p["telegram_chat_id"]:
+        await telegram.avisar(p["telegram_chat_id"], f"Nova legenda para #{po['id']}:\n\n{leg}")
+    return True
+
+
+def _destino(tipo: str, texto: str) -> tuple[str, str, bool]:
+    """(formato, descricao_limpa, sem_musica) a partir das palavras-chave que o autor escreveu na legenda."""
+    t = texto or ""
+    sem = bool(re.search(r"(?i)\bsem\s+m[uú]sica\b", t))
+    quer = re.search(r"(?i)\b(story|stories|reel|reels|feed)\b", t)
+    t = re.sub(r"(?i)\b(sem\s+m[uú]sica|story|stories|reels?|feed)\b[:,.]?", "", t).strip()
+    palavra = quer.group(1).lower() if quer else ""
+    if palavra.startswith("stor"):
+        formato = "story"
+    else:
+        formato = "reel" if tipo == "video" else "feed"
+    return formato, re.sub(r"\s+", " ", t), sem
+
+
+async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
+    """Cria um post a partir de foto/vídeo seu: ajusta o formato (e a trilha), escreve a legenda e envia para aprovação."""
+    formato, descricao, sem_musica = _destino(tipo, texto)
+    musica, aviso = None, ""
+    if tipo == "video" and p["musica_modo"] == "aleatoria" and not sem_musica:
+        musica = midia.escolher_musica()
+        if not musica:
+            aviso = "ℹ️ Modo música ligado, mas não há músicas cadastradas (menu Músicas)."
+    arquivo = await (midia.video(src, formato, musica) if tipo == "video" else midia.foto(src, formato))
+    legenda = ""
+    if formato != "story":
+        con = conexao_do_perfil(p)
+        if not descricao:
+            aviso = (aviso + "\n" if aviso else "") + "ℹ️ Sem frase de contexto: legenda em branco. Edite no painel ou mande de novo com uma frase."
+        elif not con or not con["modelo"]:
+            aviso = (aviso + "\n" if aviso else "") + "⚠️ Nenhum LLM configurado: legenda em branco."
+        else:
+            legenda = await llm.legenda_midia(con, p["contexto_md"], descricao, "vídeo" if tipo == "video" else "foto")
+    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,legenda,arquivo,formato,criado_em,atualizado_em)"
+               " VALUES(?,?,?,?,?,?,?,?,?,?)",
+               (p["id"], "aguardando_aprovacao", (descricao or "Mídia do Telegram")[:120], "Telegram", descricao, legenda,
+                arquivo, formato, db.now(), db.now()))
+    db.log(p["id"], pid, "midia_recebida", f"{tipo} -> {formato}" + (f" musica={musica.name}" if musica else ""))
+    if p["telegram_chat_id"]:
+        resumo = f"{formato.upper()}" + (f" · trilha: {musica.stem}" if musica else "")
+        mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / arquivo, pid,
+                                         (legenda or "(sem legenda)") + f"\n\n[{resumo}]", aviso)
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+    return pid
+
+
+async def mensagem_telegram(msg: dict) -> None:
+    chat_id = str(msg.get("chat", {}).get("id", ""))
+    p = db.one("SELECT * FROM perfis WHERE telegram_chat_id=? AND telegram_chat_id!='' ORDER BY ativo DESC, id LIMIT 1", (chat_id,))
+    if not p:
+        return  # só o dono do perfil manda conteúdo
+    texto = msg.get("caption") or msg.get("text") or ""
+    m = None
+    if msg.get("photo"):
+        m = ("foto", msg["photo"][-1], ".jpg")
+    elif msg.get("video"):
+        m = ("video", msg["video"], ".mp4")
+    elif (msg.get("document") or {}).get("mime_type", "").startswith(("image/", "video/")):
+        d = msg["document"]
+        m = ("video" if d["mime_type"].startswith("video/") else "foto", d, ".bin")
+    if not m:
+        await telegram.avisar(chat_id, AJUDA)
+        return
+    tipo, arq, ext = m
+    if (arq.get("file_size") or 0) > telegram.MAX_DOWNLOAD:
+        await telegram.avisar(chat_id, "O Telegram só deixa o bot baixar arquivos de até 20 MB. Mande uma versão menor.")
+        return
+    tmp = C.DATA / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    src = tmp / f"{uuid_hex()}{ext}"
+    try:
+        await telegram.avisar(chat_id, "Recebi. Preparando…")
+        await telegram.baixar(arq["file_id"], src)
+        await criar_de_midia(p, tipo, src, texto)
+    except Exception as e:
+        db.log(p["id"], None, "midia_falhou", str(e))
+        await telegram.avisar(chat_id, f"Não consegui preparar a mídia: {str(e)[:200]}")
+    finally:
+        src.unlink(missing_ok=True)
+
+
+def uuid_hex() -> str:
+    import uuid
+    return uuid.uuid4().hex
