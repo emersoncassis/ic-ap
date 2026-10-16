@@ -6,23 +6,17 @@
 - App criado no Meta for Developers; você já tem credenciais e o ID da conta.
 - Standard Access basta, porque o app só publica na sua própria conta. App Review não é exigido.
 
-## Decisão de fluxo de login (a confirmar com o app existente)
+## Fluxo de login: decidido (Facebook Login)
 
-| | Instagram Login | Facebook Login |
-|---|---|---|
-| Host | `graph.instagram.com` | `graph.facebook.com` |
-| Token | Instagram User token | Page token |
-| Permissão | `instagram_business_basic`, `instagram_business_content_publish` | `instagram_basic`, `instagram_content_publish`, `pages_read_engagement` |
-| Página do Facebook | Não precisa | Precisa estar vinculada |
+O app usa **API do Instagram com Login do Facebook**: permissões `instagram_basic` e `instagram_content_publish` (+ `pages_read_engagement`), com a conta do Instagram ligada a uma Página do Facebook. Host: `graph.facebook.com`. O token usado nas chamadas é o **token da Página**.
 
-**Recomendação:** usar o fluxo que o seu app atual já tem configurado. Se ainda não definiu, Instagram Login é mais simples.
+Obtenção do token (script `scripts/meta_token.py`):
+1. No Graph API Explorer, gerar um token de usuário com as permissões acima (curto, ~1 h).
+2. `exchange`: troca por token de usuário longo (~60 dias).
+3. `pages`: com o token longo, lista suas Páginas e devolve o token da Página e o `IG_USER_ID` ligado. Um token de Página obtido de um token de usuário longo normalmente não expira. Conferir isso com `check` e, se expirar, refazer o passo 2 e 3.
+4. Colocar `IG_USER_ID` e `IG_ACCESS_TOKEN` no `.env`.
 
-## Estado atual do seu app
-
-Você já tem o app criado no Meta Developers, o ID da conta Instagram e um token. A conferir antes de implementar:
-- Qual produto o app usa (Instagram Login ou Facebook Login) e se a permissão de publicação foi concedida.
-- Se o token é de curta duração (~1 h) ou longo (~60 dias). Se for curto, o primeiro passo é trocá-lo por um longo.
-- O token vai só no `.env`. Não colar em chat nem commitar.
+Atenção: se a Página exigir Page Publishing Authorization, o publish falha até completar essa etapa no Facebook.
 
 ## Chamadas (post de imagem única)
 
@@ -46,10 +40,14 @@ Um container filho por imagem (`is_carousel_item=true`), depois um container `CA
 
 ## Token
 
-- Token curto → trocar por token longo (~60 dias).
-- Workflow de refresh agendado (ex.: a cada 30 dias) que grava o novo token e avisa no Telegram se falhar.
+- Se o token da Página expirar, o publish devolve erro de token. O serviço mostra a mensagem da Meta e o n8n avisa no Telegram.
+- Rotina de conferência (ex.: semanal) chamando `check` ou `GET /{IG_ID}?fields=username` para detectar token inválido antes de um post.
 - Nunca commitar token.
 
 ## Erros a tratar
 
 URL inacessível, formato não-JPEG, token expirado, container em `ERROR`/`EXPIRED`, Page Publishing Authorization pendente (fluxo Facebook). Em qualquer falha: estado `falhou`, mensagem no Telegram, sem retry infinito.
+
+## Implementação
+
+`POST /publish` no serviço `tools`, corpo `{"arquivo": "<uuid>.jpg", "legenda": "..."}`. Cria o container com a URL pública, consulta `status_code` até `FINISHED` (até ~60 s, configurável), chama `media_publish`, devolve `{"media_id"}` e apaga o JPEG. Em erro da Meta responde 502 com a mensagem (sem o token). Versão da API em `IG_GRAPH_VERSION` (padrão `v23.0`; atualizar quando a Meta descontinuar).

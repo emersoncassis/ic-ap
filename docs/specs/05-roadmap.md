@@ -33,11 +33,12 @@ Carrossel; imagem de fundo com ComfyUI; Reels; métricas de alcance.
 - URL pública: Cloudflare Tunnel, máquina sempre ligada.
 - RAM: 32 GB (DDR5).
 - Feeds: tecnologia, empresa/negócios, IA e saúde tech (`config/feeds.yml`, a validar).
+- Meta: Login do Facebook (`instagram_basic`, `instagram_content_publish`), conta ligada a uma Página.
 - Credenciais Meta: app, ID da conta e token já existem.
 
 ## Perguntas em aberto
 
 1. Colar 3 a 5 textos/legendas seus para o contexto.
-2. Qual fluxo de login o app Meta usa? Você entrou pelo Meta Business, então confira no painel do app (Casos de uso / Produtos) se o produto é "API do Instagram com login do Instagram" ou com "login do Facebook", e se o token é curto ou longo. Define `IG_API_HOST`.
+2. Gerar o token da Página com `scripts/meta_token.py` (ver spec 03) e preencher o `.env`.
 3. Qual domínio vai no túnel Cloudflare (ex.: `img.seudominio.com`)? Precisa de domínio na Cloudflare.
 4. Posts por dia (padrão no `.env.example`: 2).

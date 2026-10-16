@@ -2,7 +2,7 @@
 
 Esteira local de conteúdo para Instagram: lê notícias, reage com a minha voz e contexto usando um LLM local, renderiza o post (HTML → JPEG), manda para aprovação no Telegram e publica pela Instagram Graph API oficial.
 
-> Status: specs prontas; serviço `tools` (extrair + renderizar card) implementado e testado; compose pronto. Falta o workflow n8n, a ligação com Telegram e o publish.
+> Status: specs prontas; serviço `tools` (extrair + renderizar card) implementado e testado; compose pronto. `/publish` implementado e testado contra um Graph API simulado (não contra a Meta real). Falta o workflow n8n e a ligação com o Telegram.
 
 ![exemplo do card](docs/exemplo-card.jpg)
 
