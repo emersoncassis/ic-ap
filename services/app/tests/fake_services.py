@@ -94,6 +94,8 @@ def make(port: int) -> FastAPI:
                                "texto_card": "Não é moda, é controle.\n\nPergunte onde o dado fica.",
                                "legenda_instagram": "Minha ideia de hoje: " + user_text[:60].replace("\n", " "), "cta": "Comente o que você acha.",
                                "hashtags": ["#ia", "#empresas", "#dados", "#privacidade", "#tecnologia", "#gestao", "#ysafe", "#startup"]}, ensure_ascii=False)
+        if "texto curto que aparece NA TELA" in system:
+            return json.dumps({"texto": "Disciplina sustenta o resultado. Sempre."}, ensure_ascii=False)
         if "sugere hashtags" in system:
             return json.dumps({"hashtags": ["#novatag1", "#novatag2", "#novatag3", "#novatag4"]})
         ok = {"manchete_curta": "IA vira prioridade nas empresas",

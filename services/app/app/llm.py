@@ -446,3 +446,24 @@ async def conversar(con: dict, perfil: dict, historico: list[dict], mensagem: st
         except (ValueError, TypeError) as e:
             ultimo = str(e)
     raise ValueError(f"o modelo não respondeu no formato esperado ({ultimo})")
+
+
+SCHEMA_TEXTO_STORY = {"type": "object", "properties": {"texto": _STR}, "required": ["texto"]}
+
+
+async def texto_story(con: dict, contexto: str, pedido: str, temperature: float = 0.8) -> str:
+    """Texto curto que aparece NA TELA do Story, no tom pedido pelo autor."""
+    system = (f"{contexto.strip()}\n\n---\nVocê escreve o texto curto que aparece NA TELA de um Story de Instagram do próprio autor, "
+              "em primeira pessoa e no tom dele, seguindo os pedidos de tom e assunto que ele fez. Máximo 100 caracteres, no máximo 2 frases curtas, "
+              "sem hashtags, sem emoji, sem aspas. Use só o que ele contou; não invente fatos. "
+              'Responda SOMENTE com JSON: {"texto": "..."}')
+    ultimo = ""
+    for _ in range(3):
+        try:
+            t = str(parse(await _chat(con, system, f"Pedido do autor: {pedido}{_feedback(ultimo)}", temperature, SCHEMA_TEXTO_STORY)).get("texto") or "").strip().strip('"')
+            if 3 <= len(t) <= 140:
+                return t
+            ultimo = "texto vazio ou longo demais (máximo 100 caracteres)"
+        except ValueError as e:
+            ultimo = str(e)
+    raise ValueError(f"o modelo não entregou um texto válido ({ultimo})")

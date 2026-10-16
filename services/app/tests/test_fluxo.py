@@ -741,3 +741,83 @@ def test_conversa_sem_llm_ou_de_estranho_nao_gera_nada(logado, fake):
     _novos_texto(n)
     for p in db.q("SELECT id FROM posts WHERE fonte='Texto' AND estado='aguardando_aprovacao'"):
         post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+# ---------------- pedido em texto livre na foto: story animado, música e texto na tela ----------------
+def _com_trilha():
+    import os, shutil
+    C.MUSICAS.mkdir(parents=True, exist_ok=True)
+    if not (C.MUSICAS / "trilha.mp3").exists():
+        shutil.copy(os.environ["FAKE_MEDIA_DIR"] + "/trilha.mp3", C.MUSICAS / "trilha.mp3")
+
+
+def test_foto_pedido_livre_vira_story_animado_com_musica_e_texto(logado, fake):
+    _com_trilha()
+    n = _n_midia()
+    fake.push_msg(42, "foto", "quero um story desta imagem, gere uma legenda uma animação com musica serio tom de CEO")
+    p = _novo_post(n)
+    assert p["formato"] == "story" and p["arquivo"].endswith(".mp4") and p["legenda"] == ""
+    info = _probe(C.CARDS / p["arquivo"])
+    assert (info["w"], info["h"], info["vcodec"]) == (1080, 1920, "h264") and info["audio"] and 6.5 < info["dur"] < 7.5
+    assert "tom de CEO" in fake.st()["llm_users"][-1], "o pedido de tom chega ao modelo"
+    assert p["reacao"] == "Disciplina sustenta o resultado. Sempre."
+    esperar(lambda: any(m == "sendVideo" and "animado" in d["caption"] and "trilha: trilha" in d["caption"]
+                        and "texto na tela" in d["caption"] for m, d in fake.st()["tg"]))
+    # o texto aparece no quadro (a foto é só a imagem de teste: o overlay deixa pixels claros na zona do texto)
+    import subprocess
+    quadro = C.CARDS / "q.jpg"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", "4", "-i", str(C.CARDS / p["arquivo"]), "-frames:v", "1", str(quadro)], check=True)
+    assert jpeg_dims(quadro) == (1080, 1920)
+    quadro.rename(C.CARDS.parent / "quadro_story_animado.jpg")
+    post_form(logado, f"/posts/{p['id']}/aprovar")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
+    media = next(d for t, d in fake.st()["graph"] if t == "media")
+    assert media["media_type"] == "STORIES" and media["video_url"].endswith(".mp4")
+
+
+def test_foto_story_com_texto_sem_animacao_continua_imagem(logado, fake):
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story com uma frase forte")
+    p = _novo_post(n)
+    assert p["formato"] == "story" and p["arquivo"].endswith(".jpg") and jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1920)
+    assert p["reacao"] and len(fake.st()["llm_users"]) == 1
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_story_animado_sem_musica_e_sem_biblioteca(logado, fake):
+    _com_trilha()
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story animado sem música")
+    p = _novo_post(n)
+    info = _probe(C.CARDS / p["arquivo"])
+    assert p["arquivo"].endswith(".mp4") and not info["audio"] and not fake.st()["llm_users"], "sem música e sem pedido de texto"
+    # música pedida mas biblioteca vazia: avisa em vez de calar
+    (C.MUSICAS / "trilha.mp3").rename(C.MUSICAS.parent / "trilha.bak")
+    try:
+        n = _n_midia()
+        fake.push_msg(42, "foto", "story com animação e música")
+        p2 = _novo_post(n)
+        assert not _probe(C.CARDS / p2["arquivo"])["audio"]
+        esperar(lambda: any(m == "sendVideo" and "não há músicas cadastradas" in d["caption"] for m, d in fake.st()["tg"]))
+    finally:
+        (C.MUSICAS.parent / "trilha.bak").rename(C.MUSICAS / "trilha.mp3")
+    for x in (p, p2):
+        post_form(logado, f"/posts/{x['id']}/descartar")
+
+
+def test_video_story_ganha_texto_na_tela(logado, fake):
+    _com_trilha()
+    n = _n_midia()
+    fake.push_msg(42, "video", "story com texto de abertura e música")
+    p = _novo_post(n)
+    info = _probe(C.CARDS / p["arquivo"])
+    assert p["formato"] == "story" and (info["w"], info["h"]) == (1080, 1920) and info["audio"] and p["reacao"]
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_pedidos_em_texto_livre():
+    f = pipeline._pedidos
+    assert f("quero um story, gere uma legenda uma animação com musica serio tom de CEO") == {"animar": True, "musica": True, "texto": True}
+    assert f("story sem música") == {"animar": False, "musica": False, "texto": False}
+    assert f("feed: treino de hoje") == {"animar": False, "musica": False, "texto": False}
+    assert f("story com trilha e zoom")["animar"] and f("story com trilha e zoom")["musica"]

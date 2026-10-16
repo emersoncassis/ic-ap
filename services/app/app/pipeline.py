@@ -1,5 +1,6 @@
 """Fluxo de um post: capturar -> extrair -> reagir -> renderizar -> aprovar -> publicar."""
 import asyncio, json, re, shutil, sqlite3
+from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -338,7 +339,7 @@ AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
          "• Montar/rever o perfil: /perfil (eu faço perguntas e proponho o texto; você confirma)\n"
          "• Ideias de posts: /ideias, ou peça um tema\n"
          "• Gerar: “faz um carrossel de 6 slides sobre X”, “um story sobre Y”, “2 versões para testar”\n"
-         "• Foto ou vídeo com uma frase na legenda vira post (palavras: story, reel, feed, “sem música”)\n"
+         "• Foto ou vídeo: escreva o pedido na legenda. Ex.: “story animado com música e um texto sério, tom de CEO”, “reel sem música”, “feed: treino de hoje”\n"
          "• /novo zera a conversa")
 
 
@@ -373,33 +374,71 @@ def _destino(tipo: str, texto: str) -> tuple[str, str, bool]:
     return formato, re.sub(r"\s+", " ", t), sem
 
 
+def _pedidos(texto: str) -> dict:
+    """O que o autor pediu em linguagem livre na legenda da mídia: animação, música e texto na tela."""
+    t = re.sub(r"(?i)\bsem\s+m[uú]sica\b", "", texto or "")
+    return {"animar": bool(re.search(r"(?i)\banim\w*|\bmovimento\b|\bzoom\b", t)),
+            "musica": bool(re.search(r"(?i)\bm[uú]sica\b|\btrilha\b", t)),
+            "texto": bool(re.search(r"(?i)\b(legenda|texto|frase|escrev\w+)\b", t))}
+
+
 async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
-    """Cria um post a partir de foto/vídeo seu: ajusta o formato (e a trilha), escreve a legenda e envia para aprovação."""
+    """Cria um post a partir de foto/vídeo seu. Entende pedidos em texto livre: story/reel/feed, animação, música, texto na tela
+    e tom ("sério, tom de CEO"). Ajusta o formato, mistura a trilha, escreve a legenda e envia para aprovação."""
     formato, descricao, sem_musica = _destino(tipo, texto)
-    musica, aviso = None, ""
-    if tipo == "video" and p["musica_modo"] == "aleatoria" and not sem_musica:
+    ped = _pedidos(texto)
+    con = conexao_do_perfil(p)
+    avisos: list[str] = []
+    animado = tipo == "foto" and formato == "story" and (ped["animar"] or ped["musica"])
+    quer_musica = not sem_musica and ((tipo == "video" and (p["musica_modo"] == "aleatoria" or ped["musica"]))
+                                      or (animado and (ped["musica"] or p["musica_modo"] == "aleatoria")))
+    musica = None
+    if quer_musica:
         musica = midia.escolher_musica()
         if not musica:
-            aviso = "ℹ️ Modo música ligado, mas não há músicas cadastradas (menu Músicas)."
-    arquivo = await (midia.video(src, formato, musica) if tipo == "video" else midia.foto(src, formato))
+            avisos.append("ℹ️ Pediu música, mas não há músicas cadastradas (menu Músicas do painel).")
+    texto_tela, overlay = "", None
+    if formato == "story" and ped["texto"]:
+        if not con or not con["modelo"]:
+            avisos.append("⚠️ Nenhum LLM configurado: Story sem texto na tela.")
+        else:
+            try:
+                texto_tela = await llm.texto_story(con, p["contexto_md"], descricao or texto)
+                overlay = await render.overlay_story(texto_tela)
+            except Exception as e:
+                db.log(p["id"], None, "texto_story_falhou", str(e))
+                avisos.append(f"⚠️ Não consegui escrever o texto da tela: {str(e)[:120]}")
+    try:
+        if tipo == "video":
+            arquivo = await midia.video(src, formato, musica, overlay)
+        elif animado:
+            arquivo = await midia.story_animado(src, musica, overlay)
+        else:
+            arquivo = await midia.foto(src, formato)
+            if overlay:
+                arquivo = await midia.sobrepor(arquivo, overlay)
+    finally:
+        if overlay:
+            Path(overlay).unlink(missing_ok=True)
     legenda = ""
     if formato != "story":
-        con = conexao_do_perfil(p)
         if not descricao:
-            aviso = (aviso + "\n" if aviso else "") + "ℹ️ Sem frase de contexto: legenda em branco. Edite no painel ou mande de novo com uma frase."
+            avisos.append("ℹ️ Sem frase de contexto: legenda em branco. Edite no painel ou mande de novo com uma frase.")
         elif not con or not con["modelo"]:
-            aviso = (aviso + "\n" if aviso else "") + "⚠️ Nenhum LLM configurado: legenda em branco."
+            avisos.append("⚠️ Nenhum LLM configurado: legenda em branco.")
         else:
             legenda = await llm.legenda_midia(con, p["contexto_md"], descricao, "vídeo" if tipo == "video" else "foto")
-    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,legenda,arquivo,formato,criado_em,atualizado_em)"
-               " VALUES(?,?,?,?,?,?,?,?,?,?)",
-               (p["id"], "aguardando_aprovacao", (descricao or "Mídia do Telegram")[:120], "Telegram", descricao, legenda,
+    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,criado_em,atualizado_em)"
+               " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+               (p["id"], "aguardando_aprovacao", (descricao or "Mídia do Telegram")[:120], "Telegram", descricao, texto_tela, legenda,
                 arquivo, formato, db.now(), db.now()))
-    db.log(p["id"], pid, "midia_recebida", f"{tipo} -> {formato}" + (f" musica={musica.name}" if musica else ""))
+    db.log(p["id"], pid, "midia_recebida", f"{tipo} -> {formato}" + (" animado" if animado else "") +
+           (f" musica={musica.name}" if musica else "") + (" texto" if texto_tela else ""))
     if p["telegram_chat_id"]:
-        resumo = f"{formato.upper()}" + (f" · trilha: {musica.stem}" if musica else "")
+        resumo = formato.upper() + (" · animado" if animado else "") + (f" · trilha: {musica.stem}" if musica else "") + \
+            (f" · texto na tela: “{texto_tela}”" if texto_tela else "")
         mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / arquivo, pid,
-                                         (legenda or "(sem legenda)") + f"\n\n[{resumo}]", aviso)
+                                         (legenda or "(sem legenda)") + f"\n\n[{resumo}]", "\n".join(avisos))
         db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
     return pid
 
