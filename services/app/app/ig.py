@@ -60,6 +60,11 @@ async def conferir(ig_user_id: str, token: str) -> dict:
             if "nonexisting field" in str(e):  # o ID não é o de uma conta profissional do Instagram
                 raise MetaError("o ID informado não é o de uma conta do Instagram (provavelmente é o ID da Página ou do usuário do "
                                 "Facebook). Use o assistente de token no cadastro do perfil: ele preenche o ID certo.")
+            if "pages_read_engagement" in str(e) or "does not exist, cannot be loaded" in str(e):
+                raise MetaError("a Meta não deixou ler essa conta com este token. Causas comuns: (1) foi colado um token de usuário em vez do "
+                                "token da Página; (2) o ID não é o da conta do Instagram; (3) a Página não foi marcada na tela de "
+                                "autorização do Facebook ou você não tem controle total dela. Refaça pelo assistente de token do perfil. "
+                                f"Detalhe da Meta: {str(e)[:160]}")
             raise
     return {"username": conta.get("username"), "limite": lim.get("data", lim)}
 
