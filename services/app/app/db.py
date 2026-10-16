@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS perfis(
   id INTEGER PRIMARY KEY, nome TEXT NOT NULL, handle TEXT DEFAULT '', ativo INTEGER DEFAULT 1,
   ig_user_id TEXT DEFAULT '', ig_token_enc TEXT DEFAULT '', telegram_chat_id TEXT DEFAULT '',
   llm_conexao_id INTEGER, contexto_md TEXT DEFAULT '',
-  horarios TEXT DEFAULT '09:00,18:00', musica_modo TEXT NOT NULL DEFAULT 'nenhuma', palavras_chave TEXT DEFAULT '', max_idade_horas INTEGER DEFAULT 36,
+  horarios TEXT DEFAULT '09:00,18:00', musica_modo TEXT NOT NULL DEFAULT 'nenhuma', marca TEXT NOT NULL DEFAULT '', palavras_chave TEXT DEFAULT '', max_idade_horas INTEGER DEFAULT 36,
   criado_em TEXT);
 CREATE TABLE IF NOT EXISTS feeds(
   id INTEGER PRIMARY KEY, perfil_id INTEGER, nome TEXT, url TEXT, tema TEXT DEFAULT '', ativo INTEGER DEFAULT 1);
@@ -59,14 +59,18 @@ def _migrar() -> None:
     """Bancos criados por versões anteriores: recria posts (nova UNIQUE com variação) e adiciona colunas."""
     if "musica_modo" not in _colunas("perfis"):
         _conn.execute("ALTER TABLE perfis ADD COLUMN musica_modo TEXT NOT NULL DEFAULT 'nenhuma'")
+    if "marca" not in _colunas("perfis"):
+        _conn.execute("ALTER TABLE perfis ADD COLUMN marca TEXT NOT NULL DEFAULT ''")
     if "variacao" not in _colunas("posts"):
         antigas = ",".join(sorted(_colunas("posts")))
         _conn.executescript("ALTER TABLE posts RENAME TO posts_old;")
         _conn.executescript(SCHEMA)  # recria posts com o esquema novo
         _conn.execute(f"INSERT INTO posts({antigas}) SELECT {antigas} FROM posts_old")
         _conn.execute("DROP TABLE posts_old")
-    elif "arquivos" not in _colunas("posts"):
-        _conn.execute("ALTER TABLE posts ADD COLUMN arquivos TEXT NOT NULL DEFAULT ''")
+    else:
+        for col in ("arquivos",):
+            if col not in _colunas("posts"):
+                _conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
 
 
 def q(sql: str, args: tuple = ()) -> list[dict]:

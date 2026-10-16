@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import config as C, crypto, db, ig, llm, midia, pipeline, publico, render, scheduler, seed, settings, supervisor, telegram
+from . import banco, config as C, crypto, db, ig, llm, marca as marca_mod, midia, pipeline, publico, render, scheduler, seed, settings, supervisor, telegram
 from .tunnel import tunel
 
 WEB = Path(__file__).parent / "web"
@@ -289,6 +289,14 @@ async def hashtags(request: Request, post_id: int):
 async def acao_post(request: Request, post_id: int, acao: str):
     logado(request)
     await form(request)
+    if acao in ("adaptar-story", "adaptar-feed"):
+        try:
+            novo = await pipeline.adaptar(post_id, acao.split("-")[1])
+        except Exception as e:
+            flash(request, f"Adaptar: {str(e)[:200]}", "erro")
+            return voltar(request)
+        flash(request, "Versão criada, veja na fila." if novo else "Esse post não pode ser adaptado (só imagens de feed ou story).", "ok" if novo else "aviso")
+        return voltar(request)
     fn = {"aprovar": pipeline.aprovar, "refazer": pipeline.refazer, "descartar": pipeline.descartar}.get(acao)
     if not fn:
         raise HTTPException(404)
@@ -373,7 +381,8 @@ def perfil_page(request: Request, pid: int):
     p = pipeline.perfil(pid)
     if not p:
         raise HTTPException(404)
-    return render_page(request, "perfil.html", p=p, token_mask=crypto.mask(crypto.dec(p["ig_token_enc"])),
+    return render_page(request, "perfil.html", p=p, marca=marca_mod.carregar(p), tem_logo=bool(marca_mod._logo_path(pid)),
+                       fontes=marca_mod.NOMES_FONTE, token_mask=crypto.mask(crypto.dec(p["ig_token_enc"])),
                        conexoes=db.q("SELECT id, nome, modelo, padrao FROM llm_conexoes ORDER BY id"),
                        paginas=[{k: v for k, v in pg.items() if k != "token"} for pg in _metatmp(pid)])
 
@@ -388,6 +397,39 @@ async def perfil_novo(request: Request):
         return voltar(request, "/perfis")
     pid = db.x("INSERT INTO perfis(nome,handle,ativo,criado_em) VALUES(?,?,0,?)", (nome, f.get("handle", ""), db.now()))
     flash(request, "Perfil criado (desligado). Preencha contexto, token e conexões.")
+    return voltar(request, f"/perfis/{pid}")
+
+
+@app.get("/perfis/{pid}/logo")
+def perfil_logo(request: Request, pid: int):
+    logado(request)
+    f = marca_mod._logo_path(pid)
+    if not f:
+        raise HTTPException(404)
+    return FileResponse(f, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/perfis/{pid}/marca")
+async def perfil_marca(request: Request, pid: int):
+    logado(request)
+    dados = await request.form()
+    if not secrets.compare_digest(str(dados.get("csrf", "")), request.session.get("csrf", "-")):
+        raise HTTPException(403, "CSRF inválido")
+    if not pipeline.perfil(pid):
+        raise HTTPException(404)
+    nova, avisos = marca_mod.definir(pid, **{k: str(dados.get(k) or "") for k in ("fundo", "texto", "acento", "fonte")})
+    for a in avisos:
+        flash(request, a, "aviso")
+    if dados.get("remover_logo"):
+        marca_mod.remover_logo(pid)
+    arq = dados.get("logo")
+    if arq is not None and getattr(arq, "filename", ""):
+        try:
+            marca_mod.salvar_logo(pid, await arq.read())
+        except ValueError as e:
+            flash(request, f"Logotipo: {e}.", "erro")
+    db.log(pid, None, "marca_salva")
+    flash(request, "Kit de marca salvo. Vale para os próximos cards.")
     return voltar(request, f"/perfis/{pid}")
 
 
@@ -579,7 +621,8 @@ def conexoes_page(request: Request):
     pid = perfil_atual_id(request)
     return render_page(request, "conexoes.html", perfil=pipeline.perfil(pid) if pid else None,
                        base=settings.base_url(), tunel=tunel, tem_tunel=bool(settings.tunnel_token()),
-                       tg_token=crypto.mask(settings.telegram_token()), tz=settings.tz())
+                       tg_token=crypto.mask(settings.telegram_token()), tz=settings.tz(),
+                       px_key=crypto.mask(settings.pexels_key()), un_key=crypto.mask(settings.unsplash_key()))
 
 
 @app.post("/config/{secao}")
@@ -611,6 +654,16 @@ async def config_salvar(request: Request, secao: str):
             flash(request, "Token do bot salvo. O bot passa a escutar em alguns segundos.")
         else:
             flash(request, "Cole o token do bot.", "aviso")
+    elif secao in ("pexels", "unsplash"):
+        chave = f"{secao}_key"
+        if f.get("acao") == "remover":
+            settings.guardar_segredo(chave, "")
+            flash(request, f"Chave do {secao.capitalize()} removida.")
+        elif f.get("chave", "").strip():
+            settings.guardar_segredo(chave, f["chave"].strip())
+            flash(request, f"Chave do {secao.capitalize()} salva. Use “Testar” abaixo.")
+        else:
+            flash(request, "Cole a chave de API.", "aviso")
     elif secao == "geral":
         tz = f.get("tz", "").strip()
         if settings.tz_valido(tz):
@@ -652,6 +705,10 @@ async def conexao_testar(request: Request, alvo: str):
                 raise RuntimeError("falta o token do bot (acima) ou o chat_id do perfil")
             await telegram._call("sendMessage", data={"chat_id": p["telegram_chat_id"], "text": f"Teste do ic-ap: perfil {p['nome']}."})
             flash(request, "Telegram OK: mensagem de teste enviada.")
+        elif alvo == "banco":
+            itens = await banco.buscar("mountain", "portrait", 3)
+            fontes = sorted({i["fonte"] for i in itens})
+            flash(request, f"Banco de imagens OK: {len(itens)} foto(s) de {', '.join(fontes)}.")
         elif alvo == "publico":
             base = settings.base_url()
             if not base:

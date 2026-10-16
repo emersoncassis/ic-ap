@@ -1,14 +1,17 @@
 <!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8">
 <style>
+  :root{--acc:#ff7a1a}
   *{box-sizing:border-box;margin:0}
   html,body{width:1080px;height:1920px;background:transparent;font-family:"Inter","Segoe UI","Helvetica Neue",Arial,sans-serif}
   /* zonas seguras do Story: ~250px no topo e ~340px embaixo ficam sob a interface do app */
   .scrim{position:absolute;left:0;right:0;bottom:0;height:900px;background:linear-gradient(to top,rgba(8,10,14,.86) 0%,rgba(8,10,14,.62) 45%,rgba(8,10,14,0) 100%)}
   .box{position:absolute;left:72px;right:72px;bottom:370px}
-  .rule{width:120px;height:8px;background:#ff7a1a;margin-bottom:34px}
+  .rule{width:120px;height:8px;background:var(--acc);margin-bottom:34px}
   .txt{color:#f6f4ee;font-size:{{ tamanho }}px;line-height:1.12;font-weight:800;letter-spacing:-1px;text-shadow:0 3px 24px rgba(0,0,0,.55)}
   .by{margin-top:30px;color:#c9ced6;font-size:30px;font-weight:600}
+  {{ marca_css|safe }}
+  html,body{background:transparent}
 </style></head>
 <body><div class="scrim"></div>
 <div class="box"><div class="rule"></div><div class="txt">{{ texto }}</div>{% if handle %}<div class="by">{{ handle }}</div>{% endif %}</div>

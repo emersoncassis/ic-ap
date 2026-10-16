@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<style>
+  :root{--bg:#0e1116;--fg:#f3f1ea;--mut:#9aa3ad;--acc:#ff7a1a;--line:#232a33;--body:#e4e1d8}
+  *{box-sizing:border-box;margin:0}
+  html,body{width:1080px;height:1350px;background:var(--bg);color:var(--fg)}
+  .card{position:relative;width:1080px;height:1350px;padding:84px;display:flex;flex-direction:column;overflow:hidden;
+    {% if fundo_uri %}background:url('{{ fundo_uri }}') center/cover;{% endif %}}
+  {% if fundo_uri %}.scrim{position:absolute;inset:0;background:linear-gradient(to bottom,rgba(8,10,14,.55),rgba(8,10,14,.82))}
+  .card>*:not(.scrim){position:relative}{% endif %}
+  .top{display:flex;align-items:center;gap:20px;color:var(--mut);font-size:30px}
+  .dot{width:16px;height:16px;border-radius:50%;background:var(--acc)}.top b{color:var(--fg);font-weight:700}
+  .mid{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0}
+  .aspas{font-size:220px;line-height:.6;color:var(--acc);font-weight:800;height:110px}
+  .frase{overflow:hidden;font-size:{{ tamanho }}px;line-height:1.16;font-weight:800;letter-spacing:-1px;max-height:760px;
+    {% if fundo_uri %}color:#f6f4ee;text-shadow:0 3px 24px rgba(0,0,0,.5){% endif %}}
+  .rule{width:120px;height:8px;background:var(--acc);margin:44px 0 24px}
+  .autor{font-size:38px;color:var(--mut);{% if fundo_uri %}color:#d7dbe0{% endif %}}
+  .foot{display:flex;justify-content:space-between;border-top:2px solid var(--line);padding-top:30px;font-size:28px;color:var(--mut)}
+  .logo{height:44px;max-width:220px;object-fit:contain}
+  {{ marca_css|safe }}
+</style></head>
+<body><div class="card">{% if fundo_uri %}<div class="scrim"></div>{% endif %}
+  <div class="top">{% if logo %}<img class="logo" src="{{ logo }}" alt="">{% else %}<span class="dot"></span>{% endif %}<b>{{ nome }}</b><span>{{ handle }}</span></div>
+  <div class="mid"><div class="aspas">“</div><div class="frase">{{ frase }}</div><div class="rule"></div><div class="autor">{{ autor }}</div></div>
+  <div class="foot"><span>{{ credito }}</span><span>{{ handle }}</span></div>
+</div></body></html>

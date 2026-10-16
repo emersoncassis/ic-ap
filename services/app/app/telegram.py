@@ -3,7 +3,7 @@ import asyncio, json
 
 import httpx
 
-from . import config as C, settings
+from . import config as C, db, settings
 
 
 def _url(metodo: str) -> str:
@@ -24,10 +24,7 @@ def ativo() -> bool:
 
 
 async def enviar_card(chat_id: str, arquivo, post_id: int, legenda: str, aviso: str = "") -> str:
-    teclado = {"inline_keyboard": [[
-        {"text": "✅ Postar", "callback_data": f"ap:{post_id}"},
-        {"text": "🔄 Refazer", "callback_data": f"rf:{post_id}"},
-        {"text": "🗑 Descartar", "callback_data": f"ds:{post_id}"}]]}
+    teclado = _TECLADO(post_id, str(arquivo).endswith(".jpg"))
     cap = (f"{aviso}\n\n" if aviso else "") + legenda
     video = str(arquivo).endswith(".mp4")
     with open(arquivo, "rb") as f:
@@ -37,10 +34,14 @@ async def enviar_card(chat_id: str, arquivo, post_id: int, legenda: str, aviso: 
     return str(res["message_id"])
 
 
-_TECLADO = lambda post_id: {"inline_keyboard": [[
-    {"text": "✅ Postar", "callback_data": f"ap:{post_id}"},
-    {"text": "🔄 Refazer", "callback_data": f"rf:{post_id}"},
-    {"text": "🗑 Descartar", "callback_data": f"ds:{post_id}"}]]}
+def _TECLADO(post_id: int, imagem: bool = False) -> dict:
+    linhas = [[{"text": "✅ Postar", "callback_data": f"ap:{post_id}"},
+               {"text": "🔄 Refazer", "callback_data": f"rf:{post_id}"},
+               {"text": "🗑 Descartar", "callback_data": f"ds:{post_id}"}]]
+    po = db.one("SELECT formato FROM posts WHERE id=?", (post_id,)) if imagem else None
+    if po and po["formato"] in ("feed", "story"):
+        linhas.append([{"text": "📐 Versão Story" if po["formato"] == "feed" else "📐 Versão Feed", "callback_data": f"ad:{post_id}"}])
+    return {"inline_keyboard": linhas}
 
 
 async def enviar_carrossel(chat_id: str, arquivos: list, post_id: int, legenda: str, aviso: str = "") -> str:

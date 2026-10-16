@@ -41,7 +41,7 @@ os.environ.update({
     "CONTEXT_FILE": str(REPO / "context" / "meu_contexto.md"), "FEEDS_FILE": str(TMP / "feeds.yml"),
     "PUBLIC_PORT": str(PUBLIC_PORT), "CLOUDFLARED_BIN": str(TMP / "cloudflared"),
     "IG_GRAPH_BASE": f"{FAKE}/graph", "IG_POLL_SECONDS": "0.1", "SCHEDULER_TICK": "1", "TELEGRAM_API_BASE": FAKE,
-    "GEMINI_API_BASE": f"{FAKE}/gemini", "ANTHROPIC_API_BASE": f"{FAKE}/anthropic",
+    "GEMINI_API_BASE": f"{FAKE}/gemini", "PEXELS_API_BASE": f"{FAKE}/pexels", "UNSPLASH_API_BASE": f"{FAKE}/unsplash", "ANTHROPIC_API_BASE": f"{FAKE}/anthropic",
     "CHROMIUM_PATH": chrome[0] if chrome else "",
 })
 

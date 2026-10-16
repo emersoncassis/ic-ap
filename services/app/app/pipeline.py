@@ -4,11 +4,13 @@ from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import config as C, crypto, db, feeds, ig, llm, midia, render, settings, telegram
+from . import banco, config as C, crypto, db, feeds, ig, llm, marca as marca_mod, midia, render, settings, telegram
 
 RUNNING: set[int] = set()
 MAX_FALHAS = 3
 FONTE_TEXTO = "Texto"  # posts criados a partir de uma ideia (conversa do Telegram)
+FONTE_CITACAO = "Citação"
+FONTE_MEME = "Meme"
 _GERACAO = asyncio.Lock()  # uma geração por vez: poupa a GPU local
 ESTADOS_ABERTOS = ("aguardando_aprovacao", "rascunho", "agendado", "falhou")
 ANGULOS = ["opinião direta e provocativa, no formato 'Não é X, é Y'",
@@ -123,7 +125,7 @@ async def _processar(post_id: int, p: dict, temperature: float, destino: str = "
                 continue
             print_uri = await render.print_pagina(po["noticia_url"]) if (com_print and formato == "story") else None
             arquivo, estourou = await render.card(res["manchete_curta"], res["minha_reacao"], po["fonte"] or res["fonte"],
-                                                  p["handle"], p["nome"], formato, print_uri)
+                                                  p["handle"], p["nome"], formato, print_uri, p)
             if estourou:
                 _apagar(arquivo)
                 feedback, arquivo = "minha_reacao não coube no card, encurte", None
@@ -155,6 +157,8 @@ async def refazer(post_id: int) -> bool:
     po = post(post_id)
     if po and po["fonte"] == FONTE_TEXTO:
         return await _refazer_texto(po)
+    if po and po["fonte"] in (FONTE_CITACAO, FONTE_MEME):
+        return await _refazer_visual(po)
     if po and not po["noticia_url"]:  # mídia enviada por você: só a legenda muda
         return await _refazer_legenda(po)
     if not po or not _claim(post_id, ESTADOS_ABERTOS, "extraido"):
@@ -234,6 +238,14 @@ async def acao_telegram(acao: str, post_id: int, chat_id: str) -> None:
         await refazer(post_id)
     elif acao == "ds":
         await descartar(post_id, "telegram")
+    elif acao == "ad":  # copia o post para o outro formato (feed <-> story)
+        destino = "story" if po["formato"] == "feed" else "feed"
+        try:
+            if not await adaptar(post_id, destino):
+                await telegram.avisar(chat_id, "Esse post não pode ser adaptado (só imagens de feed ou story).")
+        except Exception as e:
+            db.log(p["id"], post_id, "adaptar_falhou", str(e))
+            await telegram.avisar(chat_id, f"Não consegui adaptar: {str(e)[:200]}")
 
 
 # ---------------- pauta do dia e agenda local ----------------
@@ -340,6 +352,9 @@ AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
          "• Ideias de posts: /ideias, ou peça um tema\n"
          "• Gerar: “faz um carrossel de 6 slides sobre X”, “um story sobre Y”, “2 versões para testar”\n"
          "• Foto ou vídeo: escreva o pedido na legenda. Ex.: “story animado com música e um texto sério, tom de CEO”, “reel sem música”, “feed: treino de hoje”\n"
+         "• Marca: “meu fundo é azul escuro #0b1f3a e o destaque é amarelo”; logotipo: envie o arquivo com a legenda “logo”\n"
+         "• Citação: “faz uma citação sobre X” (com “foto de fundo” usa banco de imagens); meme: “meme sobre X”, ou envie sua foto com a legenda “meme: …”\n"
+         "• Botão 📐 em cada card copia o post para Story/Feed sem cortar a imagem\n"
          "• /novo zera a conversa")
 
 
@@ -404,7 +419,7 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
         else:
             try:
                 texto_tela = await llm.texto_story(con, p["contexto_md"], descricao or texto)
-                overlay = await render.overlay_story(texto_tela)
+                overlay = await render.overlay_story(texto_tela, "", p)
             except Exception as e:
                 db.log(p["id"], None, "texto_story_falhou", str(e))
                 avisos.append(f"⚠️ Não consegui escrever o texto da tela: {str(e)[:120]}")
@@ -461,6 +476,8 @@ async def mensagem_telegram(msg: dict) -> None:
         await _texto_telegram(p, chat_id, texto.strip())
         return
     tipo, arq, ext = m
+    eh_logo = tipo == "foto" and bool(re.search(r"(?i)\blogo(tipo)?\b", texto))
+    eh_meme = tipo == "foto" and not eh_logo and bool(re.match(r"(?i)\s*meme\b", texto))
     if (arq.get("file_size") or 0) > telegram.MAX_DOWNLOAD:
         await telegram.avisar(chat_id, "O Telegram só deixa o bot baixar arquivos de até 20 MB. Mande uma versão menor.")
         return
@@ -470,7 +487,14 @@ async def mensagem_telegram(msg: dict) -> None:
     try:
         await telegram.avisar(chat_id, "Recebi. Preparando…")
         await telegram.baixar(arq["file_id"], src)
-        await criar_de_midia(p, tipo, src, texto)
+        if eh_logo:
+            marca_mod.salvar_logo(p["id"], src.read_bytes())
+            aviso = "" if msg.get("document") else " Dica: mande o logo como ARQUIVO (sem comprimir) para manter o fundo transparente."
+            await telegram.avisar(chat_id, f"✅ Logotipo salvo. Ele aparece nos próximos cards.{aviso}")
+        elif eh_meme:
+            await criar_meme_foto(p, src, texto)
+        else:
+            await criar_de_midia(p, tipo, src, texto)
     except Exception as e:
         db.log(p["id"], None, "midia_falhou", str(e))
         await telegram.avisar(chat_id, f"Não consegui preparar a mídia: {str(e)[:200]}")
@@ -506,7 +530,7 @@ async def _processar_texto(post_id: int, p: dict, temperature: float, destino: s
                     total, longo = len(res["slides"]), None
                     for i, sl in enumerate(res["slides"], 1):
                         tipo = "capa" if i == 1 else ("cta" if i == total else "conteudo")
-                        nome, estourou = await render.slide(sl["titulo"], sl["texto"], i, total, p["handle"], p["nome"], tipo)
+                        nome, estourou = await render.slide(sl["titulo"], sl["texto"], i, total, p["handle"], p["nome"], tipo, p)
                         novos.append(nome)
                         if estourou and longo is None:
                             longo = i
@@ -515,7 +539,7 @@ async def _processar_texto(post_id: int, p: dict, temperature: float, destino: s
                         continue
                 else:
                     res = await llm.post_de_texto(con, p["contexto_md"], ideia, temperature, estrategia, feedback)
-                    nome, estourou = await render.card(res["manchete_curta"], res["texto_card"], "", p["handle"], p["nome"], formato)
+                    nome, estourou = await render.card(res["manchete_curta"], res["texto_card"], "", p["handle"], p["nome"], formato, None, p)
                     novos = [nome]
                     if estourou:
                         feedback = "texto_card não coube no card, encurte"
@@ -667,6 +691,18 @@ async def _conversar(p: dict, chat_id: str, texto: str) -> None:
     await telegram.avisar(chat_id, r["resposta"])
     if r["acao"] == "propor_perfil":
         await _propor_perfil(p, chat_id, r)
+    elif r["acao"] == "definir_marca":
+        nova, avisos = marca_mod.definir(p["id"], **r["marca"])
+        extra = ("\n" + "\n".join("⚠️ " + a for a in avisos)) if avisos else ""
+        await telegram.avisar(chat_id, f"🎨 Marca: fundo {nova['fundo']}, texto {nova['texto']}, destaque {nova['acento']}, fonte {marca_mod.NOMES_FONTE[nova['fonte']]}.{extra}")
+        db.log(p["id"], None, "marca_definida_telegram")
+    elif r["acao"] == "gerar" and r["gerar"]["formato"] in ("citacao", "meme"):
+        g = r["gerar"]
+        if g["formato"] == "citacao":
+            ids = await criar_citacao(p["id"], g["ideia"], g["fundo"] == "banco")
+        else:
+            ids = await criar_meme_banco(p["id"], g["ideia"])
+        db.log(p["id"], None, "gerado_da_conversa", f"{g['formato']} -> {len(ids)}")
     elif r["acao"] == "gerar":
         g = r["gerar"]
         ids = await criar_de_texto(p["id"], g["ideia"], g["formato"], g["n_slides"], g["variacoes"], "aguardando_aprovacao")
@@ -711,3 +747,169 @@ async def _acao_perfil(acao: str, perfil_id: int, chat_id: str) -> None:
     db.log(perfil_id, None, "perfil_salvo_telegram")
     _guardar(chat_id, "user", "Salvei a proposta de perfil.")
     await telegram.avisar(chat_id, "✅ Perfil salvo. A partir de agora escrevo com ele. Quer ideias de posts? Mande /ideias.")
+
+
+# ---------------- citação, meme e adaptação de formato ----------------
+ESTILOS_CITACAO = ("escuro", "claro", "acento")
+
+
+def _fundo_tmp() -> Path:
+    t = C.DATA / "tmp"
+    t.mkdir(parents=True, exist_ok=True)
+    return t / f"{uuid_hex()}.jpg"
+
+
+async def _processar_visual(post_id: int, p: dict, destino: str = "aguardando_aprovacao", aviso: str = "") -> bool:
+    """Gera (ou refaz) um post de citação/meme a partir do tema guardado em po['texto']."""
+    po = post(post_id)
+    novo, tmp = None, None
+    try:
+        con = conexao_do_perfil(p)
+        if not con or not con["modelo"]:
+            raise ValueError("nenhuma conexão de LLM com modelo escolhido: configure em LLM")
+        usa_banco = (po["angulo"] or "") == "banco"
+        if usa_banco and po["fonte"] == FONTE_CITACAO and not banco.disponivel():
+            usa_banco = False
+            aviso = (aviso + "\n" if aviso else "") + "ℹ️ Sem chave de banco de imagens (Conexões): citação sem foto de fundo."
+        credito = ""
+        feedback, res = None, None
+        for _ in range(3):
+            _apagar(novo)
+            novo = None
+            try:
+                if po["fonte"] == FONTE_CITACAO:
+                    res = await llm.citacao_de_texto(con, p["contexto_md"], po["texto"])
+                    if usa_banco and not tmp:
+                        tmp = _fundo_tmp()
+                        credito = banco.credito(await banco.baixar_uma(res["busca"], tmp, "portrait"))
+                    novo, estourou = await render.citacao(res["frase"], res["autor"], p["handle"], p["nome"], p,
+                                                          None if usa_banco else ESTILOS_CITACAO[post_id % len(ESTILOS_CITACAO)],
+                                                          tmp, credito)
+                    manchete, reacao = res["frase"], res["autor"]
+                else:
+                    res = await llm.meme_de_texto(con, p["contexto_md"], po["texto"])
+                    if not tmp:
+                        tmp = _fundo_tmp()
+                        credito = banco.credito(await banco.baixar_uma(res["busca"], tmp, "portrait"))
+                    novo, estourou = await render.meme(tmp, res["topo"], res["base"], p)
+                    manchete, reacao = res["topo"] or res["base"], res["base"]
+                if estourou:
+                    feedback = "o texto não coube no card, encurte"
+                    continue
+            except ValueError as e:
+                feedback = str(e)
+                continue
+            break
+        else:
+            res = None
+        if not res or not novo:
+            raise ValueError(f"o modelo não entregou uma saída válida em 3 tentativas ({feedback})")
+        legenda = res["legenda"] + (f"\n\n{credito}" if credito else "")
+        _set(post_id, destino, json_llm=json.dumps(res, ensure_ascii=False), manchete=manchete, reacao=reacao,
+             legenda=legenda, arquivo=novo, erro=None)
+        db.log(p["id"], post_id, "gerado_visual", po["fonte"])
+        if destino == "aguardando_aprovacao" and telegram.ativo() and p["telegram_chat_id"]:
+            try:
+                mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / novo, post_id, legenda, aviso)
+                db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, post_id))
+            except Exception as e:
+                db.log(p["id"], post_id, "telegram_falhou", str(e))
+        return True
+    except Exception as e:
+        _apagar(novo)
+        msg = (str(e) or type(e).__name__)[:400]
+        _set(post_id, "falhou", erro=msg)
+        db.log(p["id"], post_id, "falhou", msg)
+        if destino == "aguardando_aprovacao" and telegram.ativo() and p["telegram_chat_id"]:
+            await telegram.avisar(p["telegram_chat_id"], f"Falha ao gerar post #{post_id}: {msg[:200]}")
+        return False
+    finally:
+        if tmp:
+            tmp.unlink(missing_ok=True)
+
+
+def _existe(nome) -> bool:
+    return bool(nome) and (C.CARDS / nome).exists()
+
+
+async def _criar_visual(perfil_id: int, tema: str, fonte: str, banco_img: bool) -> list[int]:
+    p = perfil(perfil_id)
+    tema = (tema or "").strip()
+    if not p or len(tema) < 4:
+        return []
+    async with _GERACAO:
+        pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,formato,angulo,criado_em,atualizado_em)"
+                   " VALUES(?,?,?,?,?,?,?,?,?)",
+                   (perfil_id, "capturado", tema[:120], fonte, tema, "feed", "banco" if banco_img else "", db.now(), db.now()))
+        return [pid] if await _processar_visual(pid, p) else []
+
+
+async def criar_citacao(perfil_id: int, tema: str, com_foto: bool = False) -> list[int]:
+    """Card de citação com as cores da marca; com_foto usa uma foto do banco de imagens (Pexels/Unsplash) como fundo."""
+    return await _criar_visual(perfil_id, tema, FONTE_CITACAO, com_foto)
+
+
+async def criar_meme_banco(perfil_id: int, situacao: str) -> list[int]:
+    """Meme com texto em cima/embaixo sobre uma foto do banco de imagens."""
+    return await _criar_visual(perfil_id, situacao, FONTE_MEME, True)
+
+
+async def _refazer_visual(po: dict) -> bool:
+    if not _claim(po["id"], ESTADOS_ABERTOS, "extraido"):
+        return False
+    p = perfil(po["perfil_id"])
+    destino = "rascunho" if po["estado"] in ("rascunho", "agendado") else "aguardando_aprovacao"
+    async with _GERACAO:
+        ok = await _processar_visual(po["id"], p, destino)
+    if ok:
+        _apagar_post(po)
+        db.log(p["id"], po["id"], "refeito")
+        if po["tg_message_id"] and p["telegram_chat_id"]:
+            await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], "Refeito. Nova versão abaixo.")
+    return ok
+
+
+async def criar_meme_foto(p: dict, src, texto: str) -> int:
+    """Meme com a SUA foto: os textos de cima/baixo vêm da descrição que você escreveu na legenda (“meme: …”)."""
+    con = conexao_do_perfil(p)
+    if not con or not con["modelo"]:
+        raise ValueError("nenhum LLM configurado: o meme precisa dele para escrever o texto")
+    descricao = re.sub(r"(?i)^\s*meme\b[:,.\s-]*", "", texto or "").strip() or "situação engraçada"
+    res = await llm.meme_de_texto(con, p["contexto_md"], descricao)
+    nome, estourou = await render.meme(src, res["topo"], res["base"], p)
+    if estourou:
+        _apagar(nome)
+        raise ValueError("o texto do meme não coube na imagem; peça de novo com uma ideia mais curta")
+    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,criado_em,atualizado_em)"
+               " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+               (p["id"], "aguardando_aprovacao", descricao[:120], "Telegram", descricao, res["base"], res["legenda"], nome, "feed", db.now(), db.now()))
+    db.log(p["id"], pid, "meme_criado")
+    if p["telegram_chat_id"]:
+        mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / nome, pid, res["legenda"], "")
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+    return pid
+
+
+async def adaptar(post_id: int, formato: str) -> int | None:
+    """Cria uma cópia do post em outro formato (feed <-> story) sem cortar a imagem. O original continua como está."""
+    po = post(post_id)
+    if not po or formato not in ("feed", "story") or po["formato"] == formato or po["formato"] == "carrossel":
+        return None
+    arq = po["arquivo"]
+    if not arq or not (C.CARDS / arq).exists() or not arq.endswith(".jpg"):
+        return None
+    p = perfil(po["perfil_id"])
+    novo = await midia.adaptar(arq, formato)
+    legenda = "" if formato == "story" else po["legenda"]
+    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,noticia_url,fonte,texto,reacao,manchete,legenda,arquivo,formato,criado_em,atualizado_em)"
+               " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+               (po["perfil_id"], "aguardando_aprovacao", po["noticia_titulo"], po["noticia_url"], "Telegram" if not po["noticia_url"] else po["fonte"],
+                po["texto"], po["reacao"], po["manchete"], legenda, novo, formato, db.now(), db.now()))
+    db.log(po["perfil_id"], pid, "adaptado", f"#{post_id} -> {formato}")
+    if p["telegram_chat_id"] and telegram.ativo():
+        try:
+            mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / novo, pid, legenda or "(Story sem legenda)", f"📐 Versão {formato.upper()} do post #{post_id}")
+            db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+        except Exception as e:
+            db.log(po["perfil_id"], pid, "telegram_falhou", str(e))
+    return pid

@@ -37,6 +37,19 @@
   </form>
 </div>
 
+<h2>Banco de imagens (Pexels e Unsplash)</h2>
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+{% for nome, rot, key, site in [('pexels','Pexels',px_key,'pexels.com/api'),('unsplash','Unsplash',un_key,'unsplash.com/developers')] %}
+<form method="post" action="/config/{{ nome }}" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <b>{{ rot }}</b> <small>chave gratuita em {{ site }}</small>
+  <label>Chave de API {% if key %}<small>(atual: {{ key }})</small>{% endif %}</label>
+  <input type="password" name="chave" autocomplete="off">
+  <div class="acts"><button type="submit">Salvar</button>{% if key %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
+</form>
+{% endfor %}
+</div>
+<small>Usado em citações com foto de fundo e memes. O crédito do fotógrafo vai na legenda.</small>
+
 <h2>Geral</h2>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
 <form method="post" action="/config/geral" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
@@ -52,7 +65,7 @@
 <h2>Testes do perfil{% if perfil %}: {{ perfil.nome }}{% endif %}</h2>
 {% if perfil %}
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
-{% for alvo, tit, desc in [('llm','Modelo de linguagem','Gera uma reação de exemplo com a conexão deste perfil.'),('meta','Instagram (Meta)','Confere o token e o IG_USER_ID e mostra a conta.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('publico','URL pública','Grava um arquivo de teste e busca pela internet.')] %}
+{% for alvo, tit, desc in [('llm','Modelo de linguagem','Gera uma reação de exemplo com a conexão deste perfil.'),('meta','Instagram (Meta)','Confere o token e o IG_USER_ID e mostra a conta.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('banco','Banco de imagens','Busca uma foto de teste no Pexels/Unsplash.'),('publico','URL pública','Grava um arquivo de teste e busca pela internet.')] %}
   <div class="card"><b>{{ tit }}</b><p class="mut" style="margin:4px 0 10px">{{ desc }}</p>
     <form method="post" action="/conexoes/{{ alvo }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}"><button class="sec" type="submit">Testar</button></form></div>
 {% endfor %}

@@ -122,3 +122,16 @@ async def sobrepor(jpg: str, overlay: str) -> str:
                "-frames:v", "1", "-q:v", "2", str(C.CARDS / nome))
     (C.CARDS / jpg).unlink(missing_ok=True)
     return nome
+
+
+async def adaptar(arquivo: str, formato: str) -> str:
+    """Refaz uma imagem pronta em outro formato (feed 1080x1350 ou story 1080x1920) sem cortar nada:
+    a imagem inteira fica no centro e o fundo é a própria imagem ampliada e borrada. Devolve o novo arquivo em CARDS."""
+    if not arquivo.endswith(".jpg"):
+        raise MidiaError("só dá para adaptar imagens (vídeos já saem em 9:16)")
+    w, h = (1080, 1920) if formato == "story" else (1080, 1350)
+    nome = f"{uuid.uuid4().hex}.jpg"
+    fc = (f"[0:v]split[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur=30:6[bg];"
+          f"[b]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2")
+    await _run("ffmpeg", "-y", "-v", "error", "-i", str(C.CARDS / arquivo), "-filter_complex", fc, "-frames:v", "1", "-q:v", "3", str(C.CARDS / nome))
+    return nome

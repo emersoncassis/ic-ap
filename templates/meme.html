@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<style>
+  *{box-sizing:border-box;margin:0}
+  html,body{width:1080px;height:1350px;background:#000}
+  .card{position:relative;width:1080px;height:1350px;background:url('{{ foto_uri }}') center/cover;overflow:hidden}
+  .t{position:absolute;left:40px;right:40px;text-align:center;text-transform:uppercase;font-family:Impact,"Arial Black","Anton","Helvetica Neue",Arial,sans-serif;
+    font-weight:900;font-size:{{ tamanho }}px;line-height:1.05;color:#fff;letter-spacing:1px;
+    -webkit-text-stroke:3px #000;paint-order:stroke fill;text-shadow:0 4px 0 #000,0 0 18px rgba(0,0,0,.7);max-height:420px;overflow:hidden}
+  .topo{top:36px}.base{bottom:36px}
+  .logo{position:absolute;right:30px;bottom:{{ 190 if base else 30 }}px;height:44px;max-width:200px;object-fit:contain;opacity:.9}
+</style></head>
+<body><div class="card">
+  {% if topo %}<div class="t topo">{{ topo }}</div>{% endif %}
+  {% if base %}<div class="t base">{{ base }}</div>{% endif %}
+  {% if logo %}<img class="logo" src="{{ logo }}" alt="">{% endif %}
+</div></body></html>

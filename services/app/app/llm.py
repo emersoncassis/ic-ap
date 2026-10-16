@@ -382,13 +382,16 @@ async def hashtags_para(con: dict, contexto: str, texto: str, temperature: float
 
 # ---------------- conversa de brainstorming (Telegram) ----------------
 SCHEMA_AGENTE = {"type": "object", "properties": {
-    "resposta": _STR, "acao": {"type": "string", "enum": ["conversar", "propor_perfil", "gerar"]},
+    "resposta": _STR, "acao": {"type": "string", "enum": ["conversar", "propor_perfil", "gerar", "definir_marca"]},
+    "marca": {"type": "object", "properties": {"fundo": _STR, "texto": _STR, "acento": _STR, "fonte": _STR},
+              "required": ["fundo", "texto", "acento", "fonte"]},
     "perfil_md": _STR, "palavras_chave": _STR, "horarios": _STR,
     "gerar": {"type": "object", "properties": {
-        "formato": {"type": "string", "enum": ["feed", "story", "carrossel"]}, "ideia": _STR,
-        "n_slides": {"type": "integer"}, "variacoes": {"type": "integer"}},
-        "required": ["formato", "ideia", "n_slides", "variacoes"]}},
-    "required": ["resposta", "acao", "perfil_md", "palavras_chave", "horarios", "gerar"]}
+        "formato": {"type": "string", "enum": ["feed", "story", "carrossel", "citacao", "meme"]}, "ideia": _STR,
+        "n_slides": {"type": "integer"}, "variacoes": {"type": "integer"},
+        "fundo": {"type": "string", "enum": ["nenhum", "banco"]}},
+        "required": ["formato", "ideia", "n_slides", "variacoes", "fundo"]}},
+    "required": ["resposta", "acao", "perfil_md", "palavras_chave", "horarios", "gerar", "marca"]}
 
 INSTR_AGENTE = """
 Você é o assistente de brainstorming e produção de conteúdo do Instagram do autor, conversando com ele pelo Telegram.
@@ -411,9 +414,15 @@ Como conversar:
   que ele deu), gerar.formato = feed, story ou carrossel (carrossel quando ele pedir carrossel/sequência/passo a passo; story quando pedir story),
   gerar.n_slides = 5 a 8 para carrossel (0 nos demais), gerar.variacoes = 1 a 3 (mais de 1 só quando ele pedir versões ou teste A/B).
   Em "resposta", diga em uma linha o que está gerando.
-- Em qualquer outra acao ("conversar"), deixe perfil_md, palavras_chave e horarios vazios e gerar.ideia vazia.
+- Formatos extras de gerar.formato: "citacao" (card com uma frase forte; gerar.ideia = o tema ou a frase), e "meme" (foto do banco de imagens com texto
+  em cima e embaixo; gerar.ideia = a situação engraçada). Para os dois, gerar.fundo = "banco" quando ele quiser uma foto de banco de imagens
+  (sempre no meme; na citação só se ele pedir foto), senão "nenhum". Nos outros formatos, fundo = "nenhum".
+- Marca visual: se ele falar de cores, fonte ou identidade visual, use acao "definir_marca" e preencha marca{fundo, texto, acento, fonte}: cores no formato
+  #RRGGBB (deixe vazio o que ele não mudou) e fonte = sans (moderna), serif (clássica) ou mono (técnica). Em "resposta", confirme o que mudou.
+  O logotipo ele envia como arquivo (não como foto comprimida) com a palavra "logo" na legenda.
+- Em qualquer outra acao ("conversar"), deixe perfil_md, palavras_chave, horarios e marca vazios e gerar.ideia vazia.
 
-Responda SOMENTE com JSON com os campos: resposta, acao, perfil_md, palavras_chave, horarios, gerar{formato, ideia, n_slides, variacoes}.
+Responda SOMENTE com JSON com os campos: resposta, acao, perfil_md, palavras_chave, horarios, marca{fundo, texto, acento, fonte}, gerar{formato, ideia, n_slides, variacoes, fundo}.
 """.strip()
 
 
@@ -430,9 +439,10 @@ async def conversar(con: dict, perfil: dict, historico: list[dict], mensagem: st
             d = parse(raw)
             if not isinstance(d.get("resposta"), str) or not d["resposta"].strip():
                 raise ValueError("campo 'resposta' ausente ou vazio")
-            acao = d.get("acao") if d.get("acao") in ("conversar", "propor_perfil", "gerar") else "conversar"
+            acao = d.get("acao") if d.get("acao") in ("conversar", "propor_perfil", "gerar", "definir_marca") else "conversar"
             g = d.get("gerar") if isinstance(d.get("gerar"), dict) else {}
-            fmt = g.get("formato") if g.get("formato") in ("feed", "story", "carrossel") else "feed"
+            fmt = g.get("formato") if g.get("formato") in ("feed", "story", "carrossel", "citacao", "meme") else "feed"
+            mc = d.get("marca") if isinstance(d.get("marca"), dict) else {}
             ideia = str(g.get("ideia") or "").strip()
             perfil_md = str(d.get("perfil_md") or "").strip()
             if acao == "gerar" and len(ideia) < 8:
@@ -442,7 +452,9 @@ async def conversar(con: dict, perfil: dict, historico: list[dict], mensagem: st
             return {"resposta": d["resposta"].strip(), "acao": acao, "perfil_md": perfil_md,
                     "palavras_chave": str(d.get("palavras_chave") or "").strip(), "horarios": str(d.get("horarios") or "").strip(),
                     "gerar": {"formato": fmt, "ideia": ideia, "n_slides": max(3, min(int(g.get("n_slides") or 6), 10)),
-                              "variacoes": max(1, min(int(g.get("variacoes") or 1), len(ESTRATEGIAS_AB)))}}
+                              "variacoes": max(1, min(int(g.get("variacoes") or 1), len(ESTRATEGIAS_AB))),
+                              "fundo": "banco" if g.get("fundo") == "banco" else "nenhum"},
+                    "marca": {k: str(mc.get(k) or "").strip() for k in ("fundo", "texto", "acento", "fonte")}}
         except (ValueError, TypeError) as e:
             ultimo = str(e)
     raise ValueError(f"o modelo não respondeu no formato esperado ({ultimo})")
@@ -467,3 +479,51 @@ async def texto_story(con: dict, contexto: str, pedido: str, temperature: float 
         except ValueError as e:
             ultimo = str(e)
     raise ValueError(f"o modelo não entregou um texto válido ({ultimo})")
+
+
+SCHEMA_CITACAO = {"type": "object", "properties": {"frase": _STR, "autor": _STR, "legenda": _STR, "busca": _STR}, "required": ["frase", "autor", "legenda", "busca"]}
+SCHEMA_MEME = {"type": "object", "properties": {"topo": _STR, "base": _STR, "legenda": _STR, "busca": _STR},
+               "required": ["topo", "base", "legenda", "busca"]}
+
+
+async def citacao_de_texto(con: dict, contexto: str, tema: str, temperature: float = 0.9) -> dict:
+    """Frase curta e forte para um card de citação, na voz do autor (a menos que ele peça a frase de outra pessoa conhecida)."""
+    system = (f"{contexto.strip()}\n\n---\nVocê cria um card de citação para o Instagram do autor. 'frase': uma frase forte, de até 160 caracteres, "
+              "na voz dele, sem hashtags e sem aspas. Se o tema for uma frase de terceiros que ele colou, mantenha-a fiel e coloque o nome em 'autor'; "
+              "senão 'autor' é o nome do próprio autor. Nunca invente citações de pessoas reais. 'legenda': 2 a 4 linhas comentando a frase, "
+              "terminando com a chamada para ação dele, seguida de 5 a 8 hashtags. 'busca': 2 a 4 palavras EM INGLÊS para uma foto de fundo discreta "
+              'no banco de imagens (paisagem, textura ou cena sem pessoas identificáveis). Responda SOMENTE com JSON: {"frase": "...", "autor": "...", "legenda": "...", "busca": "..."}')
+    ultimo = ""
+    for _ in range(3):
+        try:
+            d = parse(await _chat(con, system, f"Tema: {tema}{_feedback(ultimo)}", temperature, SCHEMA_CITACAO))
+            frase, autor, leg = (str(d.get(k) or "").strip() for k in ("frase", "autor", "legenda"))
+            if not (8 <= len(frase) <= 220):
+                raise ValueError("frase vazia ou longa demais (máximo 160 caracteres)")
+            if len(leg) < 10:
+                raise ValueError("legenda ausente")
+            return {"frase": frase.strip('"“”'), "autor": autor, "legenda": montar_legenda(leg, "", []), "busca": str(d.get("busca") or "").strip() or "calm landscape"}
+        except ValueError as e:
+            ultimo = str(e)
+    raise ValueError(f"o modelo não entregou uma citação válida ({ultimo})")
+
+
+async def meme_de_texto(con: dict, contexto: str, situacao: str, temperature: float = 0.9) -> dict:
+    """Texto de cima e de baixo do meme, legenda e uma busca (em inglês) para achar a foto no banco de imagens."""
+    system = (f"{contexto.strip()}\n\n---\nVocê cria um meme para o Instagram do autor. 'topo' e 'base': frases curtas (até 45 caracteres cada) "
+              "que formam a piada (setup em cima, punchline embaixo); uma delas pode ficar vazia. 'busca': 2 a 4 palavras EM INGLÊS para achar a foto de fundo "
+              "num banco de imagens (cena genérica e expressiva, sem celebridades). 'legenda': 1 a 3 linhas curtas com 5 a 8 hashtags. "
+              'Responda SOMENTE com JSON: {"topo": "...", "base": "...", "legenda": "...", "busca": "..."}')
+    ultimo = ""
+    for _ in range(3):
+        try:
+            d = parse(await _chat(con, system, f"Situação: {situacao}{_feedback(ultimo)}", temperature, SCHEMA_MEME))
+            topo, base, leg, busca = (str(d.get(k) or "").strip() for k in ("topo", "base", "legenda", "busca"))
+            if not (topo or base) or max(len(topo), len(base)) > 70:
+                raise ValueError("texto do meme vazio ou longo demais (máximo 45 caracteres por linha)")
+            if len(leg) < 5:
+                raise ValueError("legenda ausente")
+            return {"topo": topo, "base": base, "legenda": montar_legenda(leg, "", []), "busca": busca or "funny reaction"}
+        except ValueError as e:
+            ultimo = str(e)
+    raise ValueError(f"o modelo não entregou um meme válido ({ultimo})")

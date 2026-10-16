@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 def make(port: int) -> FastAPI:
     app = FastAPI()
-    st = {"agente": [], "carrossel_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False}
+    st = {"agente": [], "carrossel_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False, "banco": []}
     app.state.st = st
 
     @app.get("/_st")
@@ -20,7 +20,7 @@ def make(port: int) -> FastAPI:
 
     @app.post("/_reset")
     def _reset(request: Request):
-        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[])
+        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[])
         return {}
 
     @app.post("/_set")
@@ -78,7 +78,7 @@ def make(port: int) -> FastAPI:
         st["llm_turnos"].append(turnos)
         if "assistente de brainstorming" in system:
             r = st["agente"].pop(0) if st["agente"] else {"resposta": "Oi! Vamos montar seu perfil. Quem é você e o que faz?", "acao": "conversar"}
-            base = {"perfil_md": "", "palavras_chave": "", "horarios": "", "gerar": {"formato": "feed", "ideia": "", "n_slides": 0, "variacoes": 1}}
+            base = {"perfil_md": "", "palavras_chave": "", "horarios": "", "marca": {"fundo": "", "texto": "", "acento": "", "fonte": ""}, "gerar": {"formato": "feed", "ideia": "", "n_slides": 0, "variacoes": 1}}
             return json.dumps({**base, **r}, ensure_ascii=False)
         if "monta um carrossel" in system:
             n = int(re.search(r"EXATAMENTE (\d+) slides", system).group(1))
@@ -94,6 +94,13 @@ def make(port: int) -> FastAPI:
                                "texto_card": "Não é moda, é controle.\n\nPergunte onde o dado fica.",
                                "legenda_instagram": "Minha ideia de hoje: " + user_text[:60].replace("\n", " "), "cta": "Comente o que você acha.",
                                "hashtags": ["#ia", "#empresas", "#dados", "#privacidade", "#tecnologia", "#gestao", "#ysafe", "#startup"]}, ensure_ascii=False)
+        if "card de citação" in system:
+            return json.dumps({"frase": "Quem controla o dado controla o jogo.", "autor": "Emerson Assis",
+                               "legenda": "Minha frase de hoje.\n\nComente o que você acha. #ia #dados #empresas #gestao #ysafe",
+                               "busca": "calm mountain"}, ensure_ascii=False)
+        if "cria um meme" in system:
+            return json.dumps({"topo": "Quando o relatório fecha", "base": "mas o dado era de outro cliente",
+                               "legenda": "Todo mundo já passou por isso. #ia #dados #humor #empresas #gestao", "busca": "surprised office"}, ensure_ascii=False)
         if "texto curto que aparece NA TELA" in system:
             return json.dumps({"texto": "Disciplina sustenta o resultado. Sempre."}, ensure_ascii=False)
         if "sugere hashtags" in system:
@@ -223,6 +230,27 @@ def make(port: int) -> FastAPI:
     @app.get("/graph/{ig}/content_publishing_limit")
     def g_limit(ig: str):
         return {"data": [{"quota_usage": 1}]}
+
+    # --- bancos de imagens ---
+    @app.get("/img/foto.jpg")
+    def img_foto():
+        return Response((Path(os.environ["FAKE_MEDIA_DIR"]) / "foto.jpg").read_bytes(), media_type="image/jpeg")
+
+    @app.get("/pexels/v1/search")
+    def pexels(request: Request):
+        st["banco"].append(["pexels", request.headers.get("authorization", ""), dict(request.query_params)])
+        return {"photos": [{"photographer": "Ana Souza", "url": "https://pexels.test/foto/1", "src": {"large2x": f"http://127.0.0.1:{port}/img/foto.jpg"}}]}
+
+    @app.get("/unsplash/search/photos")
+    def unsplash(request: Request):
+        st["banco"].append(["unsplash", request.headers.get("authorization", ""), dict(request.query_params)])
+        return {"results": [{"user": {"name": "Bruno Lima"}, "links": {"html": "https://unsplash.test/p/1", "download_location": f"http://127.0.0.1:{port}/unsplash/dl/1"},
+                             "urls": {"regular": f"http://127.0.0.1:{port}/img/foto.jpg"}}]}
+
+    @app.get("/unsplash/dl/{n}")
+    def unsplash_dl(n: int, request: Request):
+        st["banco"].append(["unsplash-download", request.headers.get("authorization", ""), {}])
+        return {"url": "x"}
 
     # --- Telegram ---
     @app.post("/bot{token}/{metodo}")

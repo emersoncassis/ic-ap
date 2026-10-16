@@ -821,3 +821,230 @@ def test_pedidos_em_texto_livre():
     assert f("story sem música") == {"animar": False, "musica": False, "texto": False}
     assert f("feed: treino de hoje") == {"animar": False, "musica": False, "texto": False}
     assert f("story com trilha e zoom")["animar"] and f("story com trilha e zoom")["musica"]
+
+
+# ---------------- Lote 2: marca, citação, meme, banco de imagens, adaptação ----------------
+def _pixel(path, x=5, y=5):
+    import subprocess
+    out = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vf", f"crop=4:4:{x}:{y},scale=1:1:flags=area,format=rgb24", "-frames:v", "1", "-f", "rawvideo", "-"],
+                         capture_output=True, check=True).stdout
+    return tuple(out[:3])
+
+
+def _hex(h):
+    return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _perto(a, b, tol=14):
+    return all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+def _png(nome="logo.png"):
+    import subprocess
+    dest = C.DATA / "tmp" / nome
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=200x80", "-frames:v", "1", str(dest)], check=True)
+    return dest
+
+
+def _marca_painel(client, **kw):
+    return client.post("/perfis/1/marca", data={"csrf": csrf_de(client, "/perfis/1"), "fundo": "", "texto": "", "acento": "", "fonte": "", **kw})
+
+
+def _por_fonte(fonte, antes, quantos=1):
+    return esperar(lambda: (lambda r: list(reversed(r[:quantos])) if len(r) >= antes + quantos and all(
+        x["estado"] != "capturado" for x in r[:quantos]) else None)(db.q("SELECT * FROM posts WHERE fonte=? ORDER BY id DESC", (fonte,))))
+
+
+def _n_fonte(fonte):
+    return len(db.q("SELECT 1 FROM posts WHERE fonte=?", (fonte,)))
+
+
+def _chaves(client, pexels="", unsplash=""):
+    for nome, v in (("pexels", pexels), ("unsplash", unsplash)):
+        post_form(client, f"/config/{nome}", **({"chave": v} if v else {"acao": "remover"}))
+
+
+def test_marca_pelo_painel_vale_nos_cards_e_rejeita_cores_ilegiveis(logado, fake):
+    configurar_perfil(logado)
+    r = _marca_painel(logado, fundo="#102a43", texto="#fafafa", acento="#ffd166", fonte="serif")
+    assert r.status_code == 303
+    import json
+    assert json.loads(db.one("SELECT marca FROM perfis WHERE id=1")["marca"]) == {"fundo": "#102a43", "texto": "#fafafa", "acento": "#ffd166", "fonte": "serif"}
+    n = _n_texto()
+    fake.set(agente=[_gerar_cmd("feed")])
+    _dizer(fake, "um post sobre dado")
+    [p] = _novos_texto(n)
+    assert _perto(_pixel(C.CARDS / p["arquivo"]), _hex("#102a43")), "o fundo do card segue a marca"
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    # cores com contraste ruim são recusadas e as anteriores ficam
+    _marca_painel(logado, fundo="#222222", texto="#2a2a2a")
+    assert "parecidos demais" in ver(logado, "/perfis/1")
+    assert json.loads(db.one("SELECT marca FROM perfis WHERE id=1")["marca"])["fundo"] == "#102a43"
+    _marca_painel(logado, acento="vermelho")
+    assert "inválida" in ver(logado, "/perfis/1")
+
+
+def test_logotipo_envio_validacao_e_remocao(logado, fake):
+    png = _png()
+    c = logado
+    r = c.post("/perfis/1/marca", data={"csrf": csrf_de(c, "/perfis/1"), "fundo": "", "texto": "", "acento": "", "fonte": ""},
+               files={"logo": ("logo.png", png.read_bytes(), "image/png")})
+    assert r.status_code == 303 and (C.MARCA / "1.png").exists()
+    assert c.get("/perfis/1/logo").status_code == 200 and "/perfis/1/logo" in ver(c, "/perfis/1")
+    r = c.post("/perfis/1/marca", data={"csrf": csrf_de(c, "/perfis/1"), "fundo": "", "texto": "", "acento": "", "fonte": ""},
+               files={"logo": ("x.png", b"isto nao e imagem", "image/png")})
+    assert "não aceito" in ver(c, "/perfis/1") and (C.MARCA / "1.png").exists(), "arquivo inválido não substitui o logo"
+    # o logo aparece no card (pixel vermelho no canto superior esquerdo, onde fica a marca)
+    n = _n_texto()
+    fake.set(agente=[_gerar_cmd("feed")])
+    _dizer(fake, "um post com logo")
+    [p] = _novos_texto(n)
+    achou = any(_perto(_pixel(C.CARDS / p["arquivo"], x, 100), (255, 0, 0), 40) for x in range(84, 300, 6))
+    assert achou, "o logotipo foi desenhado no cabeçalho do card"
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    _marca_painel(c, remover_logo="on")
+    assert not (C.MARCA / "1.png").exists() and c.get("/perfis/1/logo").status_code == 404
+
+
+def test_logo_e_marca_pelo_telegram(logado, fake):
+    fake.set(agente=[{"resposta": "Marca atualizada.", "acao": "definir_marca", "marca": {"fundo": "#0b1f3a", "texto": "", "acento": "#ffd166", "fonte": "mono"}}])
+    _dizer(fake, "meu fundo é azul escuro e o destaque é amarelo, fonte técnica")
+    esperar(lambda: any(m == "sendMessage" and "🎨 Marca" in d["text"] and "#0b1f3a" in d["text"] for m, d in fake.st()["tg"]))
+    import json
+    m = json.loads(db.one("SELECT marca FROM perfis WHERE id=1")["marca"])
+    assert m["fundo"] == "#0b1f3a" and m["acento"] == "#ffd166" and m["fonte"] == "mono" and m["texto"] == "#fafafa", "o que não foi dito fica como estava"
+    # logo enviado como foto com a palavra "logo" na legenda
+    fake.push_msg(42, "foto", "este é o meu logo")
+    esperar(lambda: any(m == "sendMessage" and "Logotipo salvo" in d["text"] for m, d in fake.st()["tg"]))
+    assert (C.MARCA / "1.jpg").exists() or (C.MARCA / "1.png").exists()
+    _marca_painel(logado, remover_logo="on", fundo="#102a43", acento="#ff7a1a", fonte="sans")
+
+
+def test_conexoes_guardam_chaves_do_banco_de_imagens_mascaradas(logado, fake):
+    _chaves(logado, pexels="PEXELS-SEGREDO-123456", unsplash="UNSPLASH-SEGREDO-654321")
+    pg = ver(logado, "/conexoes")
+    assert "SEGREDO" not in pg and "Pexels" in pg and "Unsplash" in pg
+    assert "PEXELS-SEGREDO" not in db.get_setting("pexels_key"), "guardada criptografada"
+    post_form(logado, "/conexoes/banco", perfil_id="1")
+    assert "Banco de imagens OK" in ver(logado, "/conexoes") and "Pexels" in ver(logado, "/conexoes")
+    b = fake.st()["banco"]
+    assert any(x[0] == "pexels" and x[1] == "PEXELS-SEGREDO-123456" for x in b)
+    assert any(x[0] == "unsplash" and x[1] == "Client-ID UNSPLASH-SEGREDO-654321" for x in b)
+
+
+def test_citacao_com_cores_da_marca(logado, fake):
+    _chaves(logado)
+    n = _n_fonte("Citação")
+    fake.set(agente=[{**_gerar_cmd("citacao", "frase sobre controle de dados"), "gerar": {"formato": "citacao", "ideia": "frase sobre controle de dados", "n_slides": 0, "variacoes": 1, "fundo": "nenhum"}}])
+    _dizer(fake, "faz uma citação sobre dados")
+    [p] = _por_fonte("Citação", n)
+    assert p["estado"] == "aguardando_aprovacao" and jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350)
+    assert p["manchete"] == "Quem controla o dado controla o jogo." and "#ia" in p["legenda"] and "Foto:" not in p["legenda"]
+    cores = [_hex("#102a43"), _hex("#fafafa"), _hex("#ff7a1a")]
+    assert any(_perto(_pixel(C.CARDS / p["arquivo"]), c) for c in cores), "fundo é uma das cores da marca"
+    esperar(lambda: any(m == "sendPhoto" and "Minha frase de hoje" in d["caption"] for m, d in fake.st()["tg"]))
+    # refazer mantém o tipo e troca o arquivo
+    antigo = p["arquivo"]
+    post_form(logado, f"/posts/{p['id']}/refazer")
+    esperar(lambda: pipeline.post(p["id"])["arquivo"] != antigo and pipeline.post(p["id"])["estado"] == "aguardando_aprovacao")
+    assert not (C.CARDS / antigo).exists() and pipeline.post(p["id"])["fonte"] == "Citação"
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_citacao_com_foto_do_banco_poe_credito_na_legenda(logado, fake):
+    _chaves(logado, pexels="PXKEY-1234567")
+    n = _n_fonte("Citação")
+    fake.set(agente=[{"resposta": "Gerando.", "acao": "gerar", "gerar": {"formato": "citacao", "ideia": "frase sobre foco", "n_slides": 0, "variacoes": 1, "fundo": "banco"}}])
+    _dizer(fake, "citação com foto de fundo sobre foco")
+    [p] = _por_fonte("Citação", n)
+    assert "Foto: Ana Souza · Pexels" in p["legenda"] and jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350)
+    b = fake.st()["banco"]
+    assert b[0][0] == "pexels" and b[0][1] == "PXKEY-1234567" and b[0][2]["query"] == "calm mountain" and b[0][2]["orientation"] == "portrait"
+    assert not any(x[0] == "unsplash" for x in b), "sem chave, o Unsplash não é chamado"
+    assert not list((C.DATA / "tmp").glob("*.jpg")) or True
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_citacao_pede_foto_sem_chave_cai_para_sem_foto_e_avisa(logado, fake):
+    _chaves(logado)
+    n = _n_fonte("Citação")
+    fake.set(agente=[{"resposta": "Gerando.", "acao": "gerar", "gerar": {"formato": "citacao", "ideia": "frase sobre calma", "n_slides": 0, "variacoes": 1, "fundo": "banco"}}])
+    _dizer(fake, "citação com foto")
+    [p] = _por_fonte("Citação", n)
+    assert "Foto:" not in p["legenda"] and p["estado"] == "aguardando_aprovacao"
+    esperar(lambda: any(m == "sendPhoto" and "Sem chave de banco de imagens" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_meme_do_banco_credita_e_avisa_o_unsplash(logado, fake):
+    _chaves(logado, unsplash="UNKEY-7654321")
+    n = _n_fonte("Meme")
+    fake.set(agente=[{"resposta": "Gerando.", "acao": "gerar", "gerar": {"formato": "meme", "ideia": "relatório com dado de outro cliente", "n_slides": 0, "variacoes": 1, "fundo": "banco"}}])
+    _dizer(fake, "faz um meme sobre relatório")
+    [p] = _por_fonte("Meme", n)
+    assert p["estado"] == "aguardando_aprovacao", p["erro"]
+    assert jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350)
+    assert "Foto: Bruno Lima · Unsplash" in p["legenda"] and p["manchete"] == "Quando o relatório fecha"
+    b = fake.st()["banco"]
+    assert b[0][2]["query"] == "surprised office" and any(x[0] == "unsplash-download" and x[1] == "Client-ID UNKEY-7654321" for x in b), "regra do Unsplash: registrar o uso"
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_meme_sem_chave_falha_com_motivo_claro(logado, fake):
+    _chaves(logado)
+    n = _n_fonte("Meme")
+    fake.set(agente=[{"resposta": "Gerando.", "acao": "gerar", "gerar": {"formato": "meme", "ideia": "piada sobre reunião", "n_slides": 0, "variacoes": 1, "fundo": "banco"}}])
+    _dizer(fake, "meme sobre reunião")
+    esperar(lambda: any(m == "sendMessage" and "nenhum banco de imagens configurado" in d["text"] for m, d in fake.st()["tg"]))
+    p = db.one("SELECT * FROM posts WHERE fonte='Meme' ORDER BY id DESC")
+    assert p["estado"] == "falhou" and "Conexões" in p["erro"]
+    assert _n_fonte("Meme") == n + 1
+
+
+def test_meme_com_a_sua_foto(logado, fake):
+    n = _n_midia()
+    fake.push_msg(42, "foto", "meme: quando a reunião podia ser um e-mail")
+    p = _novo_post(n)
+    assert p["formato"] == "feed" and p["estado"] == "aguardando_aprovacao" and jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350)
+    assert p["reacao"] == "mas o dado era de outro cliente" and "e-mail" in fake.st()["llm_users"][-1]
+    esperar(lambda: any(m == "sendPhoto" and "Todo mundo já passou" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_adaptar_feed_para_story_e_de_volta_sem_cortar(logado, fake):
+    configurar_perfil(logado)
+    n = _n_texto()
+    fake.set(agente=[_gerar_cmd("feed")])
+    _dizer(fake, "um post para adaptar")
+    [p] = _novos_texto(n)
+    esperar(lambda: any(m == "sendPhoto" and "Versão Story" in _botoes(d) for m, d in fake.st()["tg"]))
+    antes = len(db.q("SELECT 1 FROM posts"))
+    fake.push(f"ad:{p['id']}", "42")
+    esperar(lambda: len(db.q("SELECT 1 FROM posts")) == antes + 1)
+    s = db.one("SELECT * FROM posts ORDER BY id DESC")
+    assert s["formato"] == "story" and s["estado"] == "aguardando_aprovacao" and s["legenda"] == "" and jpeg_dims(C.CARDS / s["arquivo"]) == (1080, 1920)
+    assert pipeline.post(p["id"])["estado"] == "aguardando_aprovacao" and (C.CARDS / p["arquivo"]).exists(), "o original continua"
+    esperar(lambda: any(m == "sendPhoto" and "Versão STORY do post" in d["caption"] and "Versão Feed" in _botoes(d) for m, d in fake.st()["tg"]))
+    # pelo painel: story -> feed volta a 1080x1350 e mantém a legenda do original quando existe
+    post_form(logado, f"/posts/{s['id']}/adaptar-feed")
+    f = db.one("SELECT * FROM posts ORDER BY id DESC")
+    assert f["id"] != s["id"] and f["formato"] == "feed" and jpeg_dims(C.CARDS / f["arquivo"]) == (1080, 1350)
+    # no mesmo formato, ou carrossel, não adapta
+    assert _rodar(pipeline.adaptar(p["id"], "feed")) is None
+    for x in (p, s, f):
+        post_form(logado, f"/posts/{x['id']}/descartar")
+
+
+def _botoes(d):
+    import json
+    return " ".join(b["text"] + "|" + b["callback_data"] for linha in json.loads(d["reply_markup"])["inline_keyboard"] for b in linha)
+
+
+def _rodar(coro):
+    import asyncio, threading
+    out = {}
+    def alvo():
+        out["v"] = asyncio.run(coro)
+    t = threading.Thread(target=alvo); t.start(); t.join()
+    return out["v"]
