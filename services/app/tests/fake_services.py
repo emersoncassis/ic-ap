@@ -181,6 +181,10 @@ def make(port: int) -> FastAPI:
         st["graph"].append(["publish", dict(request.query_params)])
         return {"id": "MEDIA9"}
 
+    @app.get("/graph/PAGE1/content_publishing_limit")
+    def g_limit_page():
+        return JSONResponse({"error": {"message": "(#100) Tried accessing nonexisting field (content_publishing_limit)", "code": 100}}, status_code=400)
+
     @app.get("/graph/{ig}/content_publishing_limit")
     def g_limit(ig: str):
         return {"data": [{"quota_usage": 1}]}

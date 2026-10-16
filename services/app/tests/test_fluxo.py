@@ -592,3 +592,12 @@ def test_destino_por_palavras():
     assert pipeline._destino("video", "meu reel de hoje") == ("reel", "meu de hoje", False)
     assert pipeline._destino("video", "feed sem música") == ("reel", "", True)
     assert pipeline._destino("foto", "sem história")[0] == "feed"
+
+
+def test_id_de_pagina_no_lugar_do_instagram_explica_o_erro(logado):
+    antigo = db.one("SELECT ig_user_id FROM perfis WHERE id=1")["ig_user_id"]
+    db.x("UPDATE perfis SET ig_user_id='PAGE1' WHERE id=1")
+    post_form(logado, "/conexoes/meta", perfil_id="1")
+    html = ver(logado, "/conexoes")
+    assert "não é o de uma conta do Instagram" in html and "assistente" in html
+    db.x("UPDATE perfis SET ig_user_id=? WHERE id=1", (antigo,))

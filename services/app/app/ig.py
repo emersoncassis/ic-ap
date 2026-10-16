@@ -53,8 +53,14 @@ async def publicar(ig_user_id: str, token: str, media_url: str, legenda: str, fo
 
 async def conferir(ig_user_id: str, token: str) -> dict:
     async with httpx.AsyncClient(timeout=30) as c:
-        conta = await _graph(c, "GET", ig_user_id, token, fields="username")
-        lim = await _graph(c, "GET", f"{ig_user_id}/content_publishing_limit", token, fields="quota_usage,config")
+        try:
+            conta = await _graph(c, "GET", ig_user_id, token, fields="username")
+            lim = await _graph(c, "GET", f"{ig_user_id}/content_publishing_limit", token, fields="quota_usage,config")
+        except MetaError as e:
+            if "nonexisting field" in str(e):  # o ID não é o de uma conta profissional do Instagram
+                raise MetaError("o ID informado não é o de uma conta do Instagram (provavelmente é o ID da Página ou do usuário do "
+                                "Facebook). Use o assistente de token no cadastro do perfil: ele preenche o ID certo.")
+            raise
     return {"username": conta.get("username"), "limite": lim.get("data", lim)}
 
 
