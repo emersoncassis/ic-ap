@@ -23,7 +23,11 @@
 - Cron + RSS + deduplicação.
 - **Aceite:** 7 dias seguidos sem intervenção além do "Postar".
 
-## Fase 5 · Extras (opcionais)
+## Fase 5 · Dashboard e multi-perfil
+- Ver spec 06. Depende de confirmar a troca do n8n por um app Python único.
+- **Aceite:** criar o perfil do Iago pelo painel e gerar um post de teste.
+
+## Fase 6 · Extras (opcionais)
 Carrossel; imagem de fundo com ComfyUI; Reels; métricas de alcance.
 
 ## Decisões já tomadas
@@ -40,5 +44,7 @@ Carrossel; imagem de fundo com ComfyUI; Reels; métricas de alcance.
 
 1. Colar 3 a 5 textos/legendas seus para o contexto.
 2. Gerar o token da Página com `scripts/meta_token.py` (ver spec 03) e preencher o `.env`.
-3. Qual domínio vai no túnel Cloudflare (ex.: `img.seudominio.com`)? Precisa de domínio na Cloudflare.
+3. Qual subdomínio usar para as imagens (ex.: `img.seudominio.com`)? Ver `docs/cloudflare-tunnel.md`.
 4. Posts por dia (padrão no `.env.example`: 2).
+5. Iago e Igor serão adicionados como função no app da Meta? Cada um terá seu Telegram e contexto?
+6. Confirmar a troca do n8n por app Python único (spec 06).

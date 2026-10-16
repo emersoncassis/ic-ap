@@ -27,3 +27,5 @@ Pré-requisitos: Docker Desktop com WSL2 e GPU NVIDIA habilitada; um túnel nome
 | [03-instagram-publicacao](docs/specs/03-instagram-publicacao.md) | Auth, tokens, URL pública, container → publish, limites |
 | [04-contexto-pessoal](docs/specs/04-contexto-pessoal.md) | Template do `meu_contexto.md` e regras de tom |
 | [05-roadmap](docs/specs/05-roadmap.md) | Fases, critérios de aceite, perguntas em aberto |
+| [06-dashboard-multiperfil](docs/specs/06-dashboard-multiperfil.md) | Painel web e vários perfis (Emerson, Iago, Igor) |
+| [cloudflare-tunnel](docs/cloudflare-tunnel.md) | Passo a passo do túnel para a URL pública das imagens |
