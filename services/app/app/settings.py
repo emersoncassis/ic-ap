@@ -39,9 +39,5 @@ def tunnel_token() -> str:
     return segredo("tunnel_token")
 
 
-def pexels_key() -> str:
-    return segredo("pexels_key")
-
-
 def unsplash_key() -> str:
     return segredo("unsplash_key")

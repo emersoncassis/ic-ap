@@ -37,18 +37,23 @@
   </form>
 </div>
 
-<h2>Banco de imagens (Pexels e Unsplash)</h2>
+<h2>Imagens de fundo (Higgsfield e Unsplash)</h2>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
-{% for nome, rot, key, site in [('pexels','Pexels',px_key,'pexels.com/api'),('unsplash','Unsplash',un_key,'unsplash.com/developers')] %}
-<form method="post" action="/config/{{ nome }}" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
-  <b>{{ rot }}</b> <small>chave gratuita em {{ site }}</small>
-  <label>Chave de API {% if key %}<small>(atual: {{ key }})</small>{% endif %}</label>
-  <input type="password" name="chave" autocomplete="off">
-  <div class="acts"><button type="submit">Salvar</button>{% if key %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
+<form method="post" action="/config/higgs" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <b>Higgsfield</b> <small>imagem gerada por IA; cada imagem gasta créditos da sua conta</small>
+  <p class="mut" style="margin:6px 0 0">Crie a chave no painel do Higgsfield (API Keys): ela tem um <b>ID</b> e um <b>segredo</b>.</p>
+  <label>ID da chave {% if hg_key %}<small>(segredo atual: {{ hg_key }})</small>{% endif %}</label><input name="key_id" autocomplete="off">
+  <label>Segredo</label><input type="password" name="key_secret" autocomplete="off">
+  <div class="acts"><button type="submit">Salvar</button>{% if hg_key %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
 </form>
-{% endfor %}
+<form method="post" action="/config/unsplash" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <b>Unsplash</b> <small>fotos reais gratuitas (reserva, se o Higgsfield falhar ou não estiver configurado)</small>
+  <label>Chave de API {% if un_key %}<small>(atual: {{ un_key }})</small>{% endif %}</label>
+  <input type="password" name="chave" autocomplete="off">
+  <div class="acts"><button type="submit">Salvar</button>{% if un_key %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
+</form>
 </div>
-<small>Usado em citações com foto de fundo e memes. O crédito do fotógrafo vai na legenda.</small>
+<small>Usado em citações com foto de fundo e memes. Imagem do Higgsfield vai com o aviso “gerada por IA” na legenda; foto do Unsplash, com o crédito do fotógrafo.</small>
 
 <h2>Geral</h2>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
@@ -65,7 +70,7 @@
 <h2>Testes do perfil{% if perfil %}: {{ perfil.nome }}{% endif %}</h2>
 {% if perfil %}
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
-{% for alvo, tit, desc in [('llm','Modelo de linguagem','Gera uma reação de exemplo com a conexão deste perfil.'),('meta','Instagram (Meta)','Confere o token e o IG_USER_ID e mostra a conta.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('banco','Banco de imagens','Busca uma foto de teste no Pexels/Unsplash.'),('publico','URL pública','Grava um arquivo de teste e busca pela internet.')] %}
+{% for alvo, tit, desc in [('llm','Modelo de linguagem','Gera uma reação de exemplo com a conexão deste perfil.'),('meta','Instagram (Meta)','Confere o token e o IG_USER_ID e mostra a conta.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('banco','Imagens de fundo','Pede uma imagem de teste (Higgsfield gasta créditos).'),('publico','URL pública','Grava um arquivo de teste e busca pela internet.')] %}
   <div class="card"><b>{{ tit }}</b><p class="mut" style="margin:4px 0 10px">{{ desc }}</p>
     <form method="post" action="/conexoes/{{ alvo }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}"><button class="sec" type="submit">Testar</button></form></div>
 {% endfor %}

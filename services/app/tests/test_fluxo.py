@@ -860,9 +860,13 @@ def _n_fonte(fonte):
     return len(db.q("SELECT 1 FROM posts WHERE fonte=?", (fonte,)))
 
 
-def _chaves(client, pexels="", unsplash=""):
-    for nome, v in (("pexels", pexels), ("unsplash", unsplash)):
-        post_form(client, f"/config/{nome}", **({"chave": v} if v else {"acao": "remover"}))
+def _chaves(client, higgs="", unsplash=""):
+    if higgs:
+        i, sec = higgs.split(":")
+        post_form(client, "/config/higgs", key_id=i, key_secret=sec)
+    else:
+        post_form(client, "/config/higgs", acao="remover")
+    post_form(client, "/config/unsplash", **({"chave": unsplash} if unsplash else {"acao": "remover"}))
 
 
 def test_marca_pelo_painel_vale_nos_cards_e_rejeita_cores_ilegiveis(logado, fake):
@@ -921,16 +925,16 @@ def test_logo_e_marca_pelo_telegram(logado, fake):
     _marca_painel(logado, remover_logo="on", fundo="#102a43", acento="#ff7a1a", fonte="sans")
 
 
-def test_conexoes_guardam_chaves_do_banco_de_imagens_mascaradas(logado, fake):
-    _chaves(logado, pexels="PEXELS-SEGREDO-123456", unsplash="UNSPLASH-SEGREDO-654321")
+def test_conexoes_guardam_chaves_de_imagem_mascaradas_e_testam(logado, fake):
+    _chaves(logado, higgs="IDHIGGS123:SEGREDOHIGGS456", unsplash="UNSPLASH-SEGREDO-654321")
     pg = ver(logado, "/conexoes")
-    assert "SEGREDO" not in pg and "Pexels" in pg and "Unsplash" in pg
-    assert "PEXELS-SEGREDO" not in db.get_setting("pexels_key"), "guardada criptografada"
+    assert "SEGREDO" not in pg and "Higgsfield" in pg and "Unsplash" in pg
+    assert "SEGREDOHIGGS" not in db.get_setting("higgs_key") and "SEGREDO" not in db.get_setting("unsplash_key"), "guardadas criptografadas"
     post_form(logado, "/conexoes/banco", perfil_id="1")
-    assert "Banco de imagens OK" in ver(logado, "/conexoes") and "Pexels" in ver(logado, "/conexoes")
+    assert "recebi uma imagem de Higgsfield" in ver(logado, "/conexoes")
     b = fake.st()["banco"]
-    assert any(x[0] == "pexels" and x[1] == "PEXELS-SEGREDO-123456" for x in b)
-    assert any(x[0] == "unsplash" and x[1] == "Client-ID UNSPLASH-SEGREDO-654321" for x in b)
+    assert b[0][0] == "higgs" and b[0][1] == "Key IDHIGGS123:SEGREDOHIGGS456" and b[0][2]["idem"]
+    assert not any(x[0].startswith("unsplash") for x in b), "com o Higgsfield funcionando, o Unsplash não é usado"
 
 
 def test_citacao_com_cores_da_marca(logado, fake):
@@ -952,18 +956,39 @@ def test_citacao_com_cores_da_marca(logado, fake):
     post_form(logado, f"/posts/{p['id']}/descartar")
 
 
-def test_citacao_com_foto_do_banco_poe_credito_na_legenda(logado, fake):
-    _chaves(logado, pexels="PXKEY-1234567")
+def test_citacao_com_imagem_do_higgsfield_avisa_que_e_ia(logado, fake):
+    _chaves(logado, higgs="IDKEY:SECRETKEY")
     n = _n_fonte("Citação")
     fake.set(agente=[{"resposta": "Gerando.", "acao": "gerar", "gerar": {"formato": "citacao", "ideia": "frase sobre foco", "n_slides": 0, "variacoes": 1, "fundo": "banco"}}])
     _dizer(fake, "citação com foto de fundo sobre foco")
     [p] = _por_fonte("Citação", n)
-    assert "Foto: Ana Souza · Pexels" in p["legenda"] and jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350)
+    assert "Imagem gerada por IA (Higgsfield)" in p["legenda"] and jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350)
     b = fake.st()["banco"]
-    assert b[0][0] == "pexels" and b[0][1] == "PXKEY-1234567" and b[0][2]["query"] == "calm mountain" and b[0][2]["orientation"] == "portrait"
-    assert not any(x[0] == "unsplash" for x in b), "sem chave, o Unsplash não é chamado"
-    assert not list((C.DATA / "tmp").glob("*.jpg")) or True
+    assert b[0][0] == "higgs" and "calm mountain" in b[0][2]["prompt"] and "no text" in b[0][2]["prompt"]
+    assert sum(1 for x in b if x[0] == "higgs-status") >= 2, "esperou a geração assíncrona terminar"
     post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_higgsfield_recusado_cai_no_unsplash_ou_explica(logado, fake):
+    ideia = {"resposta": "Gerando.", "acao": "gerar", "gerar": {"formato": "meme", "ideia": "piada sobre prazo", "n_slides": 0, "variacoes": 1, "fundo": "banco"}}
+    # conteúdo bloqueado + Unsplash configurado: usa a foto do Unsplash
+    _chaves(logado, higgs="ID:SEG", unsplash="UNKEY-1")
+    fake.set(agente=[ideia], higgs_modo="nsfw")
+    n = _n_fonte("Meme")
+    _dizer(fake, "meme sobre prazo")
+    [p] = _por_fonte("Meme", n)
+    assert p["estado"] == "aguardando_aprovacao" and "Foto: Bruno Lima · Unsplash" in p["legenda"]
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    # sem Unsplash: falha com o motivo
+    _chaves(logado, higgs="ID:SEG")
+    fake.set(agente=[ideia], higgs_modo="nsfw")
+    _dizer(fake, "meme sobre prazo de novo")
+    esperar(lambda: any(m == "sendMessage" and "não gerou a imagem" in d["text"] for m, d in fake.st()["tg"]))
+    # chave recusada (401)
+    _chaves(logado, higgs="ID:RUIM")
+    fake.set(agente=[ideia], higgs_modo="ok")
+    _dizer(fake, "meme sobre prazo outra vez")
+    esperar(lambda: any(m == "sendMessage" and "recusou a chave" in d["text"] for m, d in fake.st()["tg"]))
 
 
 def test_citacao_pede_foto_sem_chave_cai_para_sem_foto_e_avisa(logado, fake):
@@ -996,7 +1021,7 @@ def test_meme_sem_chave_falha_com_motivo_claro(logado, fake):
     n = _n_fonte("Meme")
     fake.set(agente=[{"resposta": "Gerando.", "acao": "gerar", "gerar": {"formato": "meme", "ideia": "piada sobre reunião", "n_slides": 0, "variacoes": 1, "fundo": "banco"}}])
     _dizer(fake, "meme sobre reunião")
-    esperar(lambda: any(m == "sendMessage" and "nenhum banco de imagens configurado" in d["text"] for m, d in fake.st()["tg"]))
+    esperar(lambda: any(m == "sendMessage" and "nenhuma fonte de imagens configurada" in d["text"] for m, d in fake.st()["tg"]))
     p = db.one("SELECT * FROM posts WHERE fonte='Meme' ORDER BY id DESC")
     assert p["estado"] == "falhou" and "Conexões" in p["erro"]
     assert _n_fonte("Meme") == n + 1

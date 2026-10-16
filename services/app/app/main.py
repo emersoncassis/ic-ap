@@ -622,7 +622,7 @@ def conexoes_page(request: Request):
     return render_page(request, "conexoes.html", perfil=pipeline.perfil(pid) if pid else None,
                        base=settings.base_url(), tunel=tunel, tem_tunel=bool(settings.tunnel_token()),
                        tg_token=crypto.mask(settings.telegram_token()), tz=settings.tz(),
-                       px_key=crypto.mask(settings.pexels_key()), un_key=crypto.mask(settings.unsplash_key()))
+                       hg_key=crypto.mask(banco.higgs_chave().split(':')[-1]), un_key=crypto.mask(settings.unsplash_key()))
 
 
 @app.post("/config/{secao}")
@@ -654,14 +654,22 @@ async def config_salvar(request: Request, secao: str):
             flash(request, "Token do bot salvo. O bot passa a escutar em alguns segundos.")
         else:
             flash(request, "Cole o token do bot.", "aviso")
-    elif secao in ("pexels", "unsplash"):
-        chave = f"{secao}_key"
+    elif secao == "higgs":
         if f.get("acao") == "remover":
-            settings.guardar_segredo(chave, "")
-            flash(request, f"Chave do {secao.capitalize()} removida.")
+            settings.guardar_segredo("higgs_key", "")
+            flash(request, "Chave do Higgsfield removida.")
+        elif f.get("key_id", "").strip() and f.get("key_secret", "").strip():
+            settings.guardar_segredo("higgs_key", f"{f['key_id'].strip()}:{f['key_secret'].strip()}")
+            flash(request, "Chave do Higgsfield salva. Use “Testar” abaixo (gera uma imagem de verdade e gasta créditos).")
+        else:
+            flash(request, "Preencha o ID e o segredo da chave.", "aviso")
+    elif secao == "unsplash":
+        if f.get("acao") == "remover":
+            settings.guardar_segredo("unsplash_key", "")
+            flash(request, "Chave do Unsplash removida.")
         elif f.get("chave", "").strip():
-            settings.guardar_segredo(chave, f["chave"].strip())
-            flash(request, f"Chave do {secao.capitalize()} salva. Use “Testar” abaixo.")
+            settings.guardar_segredo("unsplash_key", f["chave"].strip())
+            flash(request, "Chave do Unsplash salva.")
         else:
             flash(request, "Cole a chave de API.", "aviso")
     elif secao == "geral":
@@ -706,9 +714,12 @@ async def conexao_testar(request: Request, alvo: str):
             await telegram._call("sendMessage", data={"chat_id": p["telegram_chat_id"], "text": f"Teste do ic-ap: perfil {p['nome']}."})
             flash(request, "Telegram OK: mensagem de teste enviada.")
         elif alvo == "banco":
-            itens = await banco.buscar("mountain", "portrait", 3)
-            fontes = sorted({i["fonte"] for i in itens})
-            flash(request, f"Banco de imagens OK: {len(itens)} foto(s) de {', '.join(fontes)}.")
+            tmp = C.DATA / "tmp" / f"teste_{secrets.token_hex(6)}.jpg"
+            try:
+                item = await banco.baixar_uma("mountain lake", tmp)
+            finally:
+                tmp.unlink(missing_ok=True)
+            flash(request, f"Imagens OK: recebi uma imagem de {item['fonte']}.")
         elif alvo == "publico":
             base = settings.base_url()
             if not base:

@@ -20,7 +20,7 @@ def make(port: int) -> FastAPI:
 
     @app.post("/_reset")
     def _reset(request: Request):
-        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[])
+        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok")
         return {}
 
     @app.post("/_set")
@@ -236,10 +236,23 @@ def make(port: int) -> FastAPI:
     def img_foto():
         return Response((Path(os.environ["FAKE_MEDIA_DIR"]) / "foto.jpg").read_bytes(), media_type="image/jpeg")
 
-    @app.get("/pexels/v1/search")
-    def pexels(request: Request):
-        st["banco"].append(["pexels", request.headers.get("authorization", ""), dict(request.query_params)])
-        return {"photos": [{"photographer": "Ana Souza", "url": "https://pexels.test/foto/1", "src": {"large2x": f"http://127.0.0.1:{port}/img/foto.jpg"}}]}
+    @app.post("/higgs/higgsfield-ai/soul/v2/standard")
+    async def higgs_gerar(request: Request):
+        b = await request.json()
+        st["banco"].append(["higgs", request.headers.get("authorization", ""), {"prompt": b.get("prompt"), "idem": bool(request.headers.get("idempotency-key"))}])
+        if request.headers.get("authorization", "").endswith("RUIM"):
+            return JSONResponse({"detail": "invalid key"}, status_code=401)
+        rid = f"req{len(st['banco'])}"
+        return {"status": "queued", "request_id": rid, "status_url": f"http://127.0.0.1:{port}/higgs/requests/{rid}/status"}
+
+    @app.get("/higgs/requests/{rid}/status")
+    def higgs_status(rid: str, request: Request):
+        st["banco"].append(["higgs-status", request.headers.get("authorization", ""), {}])
+        if st.get("higgs_modo") == "nsfw":
+            return {"status": "nsfw", "request_id": rid}
+        if sum(1 for x in st["banco"] if x[0] == "higgs-status") < 2:
+            return {"status": "in_progress", "request_id": rid}
+        return {"status": "completed", "request_id": rid, "images": [{"url": f"http://127.0.0.1:{port}/img/foto.jpg"}]}
 
     @app.get("/unsplash/search/photos")
     def unsplash(request: Request):

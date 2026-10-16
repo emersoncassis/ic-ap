@@ -853,7 +853,7 @@ async def _criar_visual(perfil_id: int, tema: str, fonte: str, banco_img: bool) 
 
 
 async def criar_citacao(perfil_id: int, tema: str, com_foto: bool = False) -> list[int]:
-    """Card de citação com as cores da marca; com_foto usa uma foto do banco de imagens (Pexels/Unsplash) como fundo."""
+    """Card de citação com as cores da marca; com_foto usa uma foto do banco de imagens (Higgsfield ou Unsplash) como fundo."""
     return await _criar_visual(perfil_id, tema, FONTE_CITACAO, com_foto)
 
 

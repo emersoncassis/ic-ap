@@ -1,60 +1,81 @@
-"""Banco de imagens gratuito (Pexels e Unsplash). Cada um pede uma chave de API gratuita, configurada em Conexões."""
-import random
+"""Fonte de imagens de fundo (citações e memes): Higgsfield (imagem gerada por IA) e, como alternativa gratuita, Unsplash."""
+import asyncio, random, time, uuid
 from pathlib import Path
 
 import httpx
 
 from . import config as C, settings
 
-ORIENT = {"portrait": ("portrait", "portrait"), "landscape": ("landscape", "landscape"), "square": ("square", "squarish")}
+MAX_ESPERA_S = 180
 
 
 class BancoError(Exception):
     pass
 
 
+def higgs_chave() -> str:
+    """'ID:SEGREDO' da API do Higgsfield (cabeçalho Authorization: Key ID:SEGREDO)."""
+    return settings.segredo("higgs_key")
+
+
 def disponivel() -> bool:
-    return bool(settings.pexels_key() or settings.unsplash_key())
+    return bool(higgs_chave() or settings.unsplash_key())
 
 
-async def buscar(consulta: str, orientacao: str = "portrait", n: int = 8) -> list[dict]:
-    """Fotos para a consulta (de preferência em inglês). Cada item: fonte, autor, link, url (e download_location do Unsplash)."""
-    if not disponivel():
-        raise BancoError("nenhum banco de imagens configurado: cole a chave do Pexels ou do Unsplash em Conexões")
-    o_px, o_un = ORIENT.get(orientacao, ORIENT["portrait"])
-    itens: list[dict] = []
-    erros: list[str] = []
-    async with httpx.AsyncClient(timeout=30) as c:
-        if settings.pexels_key():
-            try:
-                r = await c.get(f"{C.PEXELS_API_BASE}/v1/search", headers={"Authorization": settings.pexels_key()},
-                                params={"query": consulta, "orientation": o_px, "per_page": n, "locale": "pt-BR"})
-                r.raise_for_status()
-                itens += [{"fonte": "Pexels", "autor": f.get("photographer", ""), "link": f.get("url", ""),
-                           "url": (f.get("src") or {}).get("large2x") or (f.get("src") or {}).get("large", "")}
-                          for f in r.json().get("photos", [])]
-            except Exception as e:
-                erros.append(f"Pexels: {type(e).__name__}")
-        if settings.unsplash_key():
-            try:
-                r = await c.get(f"{C.UNSPLASH_API_BASE}/search/photos", headers={"Authorization": f"Client-ID {settings.unsplash_key()}", "Accept-Version": "v1"},
-                                params={"query": consulta, "orientation": o_un, "per_page": n})
-                r.raise_for_status()
-                itens += [{"fonte": "Unsplash", "autor": (f.get("user") or {}).get("name", ""), "link": (f.get("links") or {}).get("html", ""),
-                           "url": (f.get("urls") or {}).get("regular", ""), "download": (f.get("links") or {}).get("download_location", "")}
-                          for f in r.json().get("results", [])]
-            except Exception as e:
-                erros.append(f"Unsplash: {type(e).__name__}")
-    itens = [i for i in itens if i["url"]]
-    if not itens:
-        raise BancoError("nenhuma imagem encontrada para essa busca" + (f" ({'; '.join(erros)})" if erros else ""))
-    return itens
+async def _higgs(c: httpx.AsyncClient, consulta: str) -> dict:
+    """Gera UMA imagem pela API do Higgsfield (assíncrona: envia, consulta o status até concluir). Gasta créditos da conta."""
+    aut = {"Authorization": f"Key {higgs_chave()}"}
+    prompt = f"{consulta}, vertical editorial photograph, natural light, no text, no watermark, no logos"
+    r = await c.post(f"{C.HIGGS_API_BASE}/higgsfield-ai/soul/v2/standard", json={"prompt": prompt},
+                     headers={**aut, "Idempotency-Key": uuid.uuid4().hex})
+    if r.status_code in (401, 403):
+        raise BancoError("o Higgsfield recusou a chave (confira ID e segredo em Conexões)")
+    r.raise_for_status()
+    d = r.json()
+    status_url = d.get("status_url") or f"{C.HIGGS_API_BASE}/requests/{d.get('request_id')}/status"
+    fim = time.time() + MAX_ESPERA_S
+    while time.time() < fim:
+        s = (await c.get(status_url, headers=aut)).json()
+        st = s.get("status")
+        if st == "completed":
+            imgs = s.get("images") or []
+            if imgs and imgs[0].get("url"):
+                return {"fonte": "Higgsfield", "autor": "", "link": "", "url": imgs[0]["url"], "ia": True}
+            raise BancoError("o Higgsfield concluiu sem devolver imagem")
+        if st in ("failed", "nsfw", "canceled"):
+            raise BancoError(f"o Higgsfield não gerou a imagem (status: {st})")
+        await asyncio.sleep(C.HIGGS_POLL_SECONDS)
+    raise BancoError("o Higgsfield demorou demais para gerar a imagem")
+
+
+async def _unsplash(c: httpx.AsyncClient, consulta: str, orientacao: str) -> list[dict]:
+    o = {"portrait": "portrait", "landscape": "landscape", "square": "squarish"}.get(orientacao, "portrait")
+    r = await c.get(f"{C.UNSPLASH_API_BASE}/search/photos", headers={"Authorization": f"Client-ID {settings.unsplash_key()}", "Accept-Version": "v1"},
+                    params={"query": consulta, "orientation": o, "per_page": 8})
+    r.raise_for_status()
+    return [{"fonte": "Unsplash", "autor": (f.get("user") or {}).get("name", ""), "link": (f.get("links") or {}).get("html", ""),
+             "url": (f.get("urls") or {}).get("regular", ""), "download": (f.get("links") or {}).get("download_location", "")}
+            for f in r.json().get("results", []) if (f.get("urls") or {}).get("regular")]
 
 
 async def baixar_uma(consulta: str, destino: Path, orientacao: str = "portrait") -> dict:
-    """Escolhe uma das fotos da busca, grava em destino (JPEG/PNG) e devolve o item (com o crédito)."""
-    item = random.choice(await buscar(consulta, orientacao))
+    """Obtém uma imagem para a consulta, grava em destino e devolve o item (com o crédito). Higgsfield tem prioridade; se falhar e houver Unsplash, usa ele."""
+    if not disponivel():
+        raise BancoError("nenhuma fonte de imagens configurada: cole a chave do Higgsfield ou do Unsplash em Conexões")
+    item, erro = None, ""
     async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        if higgs_chave():
+            try:
+                item = await _higgs(c, consulta)
+            except (BancoError, httpx.HTTPError) as e:
+                erro = str(e) or type(e).__name__
+                if not settings.unsplash_key():
+                    raise BancoError(erro)
+        if not item:
+            lista = await _unsplash(c, consulta, orientacao)
+            if not lista:
+                raise BancoError("nenhuma imagem encontrada para essa busca" + (f" ({erro})" if erro else ""))
+            item = random.choice(lista)
         r = await c.get(item["url"])
         r.raise_for_status()
         if item.get("download"):  # regra do Unsplash: avisar que a foto foi usada
@@ -62,12 +83,15 @@ async def baixar_uma(consulta: str, destino: Path, orientacao: str = "portrait")
                 await c.get(item["download"], headers={"Authorization": f"Client-ID {settings.unsplash_key()}"})
             except Exception:
                 pass
-    if r.content[:2] != b"\xff\xd8" and r.content[:8] != b"\x89PNG\r\n\x1a\n":
-        raise BancoError("o banco de imagens devolveu um arquivo que não é imagem")
+    b = r.content
+    if b[:2] != b"\xff\xd8" and b[:8] != b"\x89PNG\r\n\x1a\n" and not (b[:4] == b"RIFF" and b[8:12] == b"WEBP"):
+        raise BancoError("a fonte de imagens devolveu um arquivo que não é imagem")
     destino.parent.mkdir(parents=True, exist_ok=True)
-    destino.write_bytes(r.content)
+    destino.write_bytes(b)
     return item
 
 
 def credito(item: dict) -> str:
+    if item.get("ia"):
+        return "Imagem gerada por IA (Higgsfield)"
     return f"Foto: {item['autor']} · {item['fonte']}" if item.get("autor") else f"Foto: {item['fonte']}"
