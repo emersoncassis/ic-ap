@@ -1351,3 +1351,115 @@ def test_agendar_pelo_telegram_escolhe_horarios_livres_do_perfil(logado, fake):
     pipeline.desagendar(p["id"])
     for x in (p, p2):
         post_form(logado, f"/posts/{x['id']}/descartar")
+
+
+# ---------------- Aba Voz: gravação, limpeza e gestão de vozes clonadas ----------------
+def _tom_wav(dur=6.0, silencio=1.5, db=0, freq=300):
+    import subprocess
+    af = f"adelay={int(silencio * 1000)},apad=pad_dur={silencio}" + (f",volume={db}dB" if db else "")
+    return subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"sine=frequency={freq}:duration={dur}", "-af", af, "-ar", "44100",
+                           "-ac", "1", "-f", "wav", "-"], capture_output=True, check=True).stdout
+
+
+def _enviar_voz(client, nome="Emerson Teste", audio=None, nome_arq="gravacao.wav", **extra):
+    dados = {"csrf": csrf_de(client, "/voz"), "nome": nome, "dono": "propria", "consentimento": "1", **extra}
+    dados = {k: v for k, v in dados.items() if v is not None}
+    return client.post("/voz/adicionar", data=dados, files={"arquivo": (nome_arq, audio if audio is not None else _tom_wav(), "audio/wav")})
+
+
+def _flashes(pg):
+    return " | ".join(re.findall(r'class="flash[^>]*>([^<]*)', pg))
+
+
+def test_aba_voz_aparece_no_menu_e_orienta_sem_servidor(logado):
+    _voz_cfg(logado, whisper=False, tts=False)
+    pg = ver(logado, "/voz")
+    assert 'href="/voz"' in pg and "Nenhum servidor configurado" in pg and "docker compose --profile gpu up" in pg
+    post_form(logado, "/voz/servidor/usar")
+    assert db.get_setting("tts_url") == "http://voz:8001" and db.get_setting("whisper_url") == "http://voz:8001"
+    pg = ver(logado, "/voz")
+    assert "Sem resposta" in pg, "servidor local desligado: a página avisa em vez de quebrar"
+    _voz_cfg(logado, whisper=False, tts=False)
+
+
+def test_voz_exige_consentimento_nome_e_formato_valido(logado):
+    r = _enviar_voz(logado, consentimento=None)
+    assert "confirme que a voz é sua" in _flashes(logado.get("/voz").text) and not (C.DATA / "vozes" / "emerson-teste").exists()
+    _enviar_voz(logado, dono="outra", autor="")
+    assert "diga de quem é a voz" in _flashes(logado.get("/voz").text)
+    _enviar_voz(logado, nome_arq="nota.txt")
+    assert "formato não aceito" in _flashes(logado.get("/voz").text)
+    _enviar_voz(logado, audio=b"nao e audio de verdade" * 20)
+    assert "não consegui ler o áudio" in _flashes(logado.get("/voz").text)
+    assert not (C.DATA / "vozes" / "emerson-teste").exists(), "falha não deixa pasta pela metade"
+
+
+def test_voz_amostra_e_limpa_nivelada_e_com_avisos(logado):
+    import subprocess, json
+    _enviar_voz(logado)
+    pg = ver(logado, "/voz")
+    assert "Emerson Teste" in pg and "Amostra de referência" in pg
+    ref = C.DATA / "vozes" / "emerson-teste" / "ref.wav"
+    info = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(ref)], capture_output=True, text=True).stdout)
+    s = info["streams"][0]
+    assert (s["sample_rate"], s["channels"]) == ("24000", 1)
+    dur = float(info["format"]["duration"])
+    assert 5.0 < dur < 8.0, f"9 s com 1,5 s de silêncio em cada ponta devem encolher (ficou {dur:.1f})"
+    assert "fica melhor com 15 a 30 s" in pg or "grave pelo menos 15 s" in pg
+    a = logado.get("/voz/emerson-teste/amostra.wav")
+    assert a.status_code == 200 and a.headers["content-type"] == "audio/wav" and a.content[:4] == b"RIFF"
+    # segunda gravação soma à primeira; a sem-nome/inexistente dá 404
+    _enviar_voz(logado, consentimento=None, audio=_tom_wav(dur=8, freq=350))
+    ref2 = float(json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(ref)], capture_output=True, text=True).stdout)["format"]["duration"])
+    assert ref2 > dur + 6, "duas gravações juntas"
+    assert logado.get("/voz/nao-existe/amostra.wav").status_code == 404 and logado.get("/voz/..%2f/amostra.wav").status_code in (404, 422)
+    # remover uma gravação reprocessa a referência
+    post_form(logado, "/voz/emerson-teste/take/2/remover")
+    ref3 = float(json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(ref)], capture_output=True, text=True).stdout)["format"]["duration"])
+    assert abs(ref3 - dur) < 0.3
+
+
+def test_voz_aviso_de_gravacao_estourada_e_silenciosa(logado):
+    _enviar_voz(logado, nome="Estourada", audio=_tom_wav(db=40))
+    assert "estourou" in ver(logado, "/voz")
+    _enviar_voz(logado, nome="Baixa", audio=_tom_wav(db=-35))
+    assert "baixa demais" in ver(logado, "/voz")
+    _enviar_voz(logado, nome="Muda", audio=_tom_wav(dur=0.3, silencio=0.2))
+    assert "quase não há fala" in _flashes(logado.get("/voz").text) and not (C.DATA / "vozes" / "muda").exists()
+    for sl in ("estourada", "baixa"):
+        post_form(logado, f"/voz/{sl}/excluir")
+        assert not (C.DATA / "vozes" / sl).exists()
+
+
+def test_voz_testar_usa_o_nome_da_voz_e_padrao_vai_para_conexoes(logado, fake):
+    _voz_cfg(logado, whisper=False, tts=True)
+    post_form(logado, "/voz/emerson-teste/padrao")
+    assert db.get_setting("tts_voz") == "emerson-teste" and "★ padrão" in ver(logado, "/voz")
+    antes = len(fake.st()["voz"])
+    r = post_form(logado, "/voz/emerson-teste/testar", texto="Olá, esta é a minha voz.")
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/mpeg" and len(r.content) > 500
+    t = fake.st()["voz"][antes]
+    assert t[0] == "tts" and t[2]["voice"] == "emerson-teste" and t[2]["input"] == "Olá, esta é a minha voz."
+    # voz de outra pessoa escolhida no teste não vaza para a padrão
+    _enviar_voz(logado, nome="Outra Pessoa", dono="outra", autor="Fulano")
+    assert "voz de Fulano" in ver(logado, "/voz")
+    post_form(logado, "/voz/outra-pessoa/testar", texto="")
+    assert fake.st()["voz"][-1][2]["voice"] == "outra-pessoa" and db.get_setting("tts_voz") == "emerson-teste"
+    # servidor com erro: devolve mensagem legível, não 500
+    fake.set(voz_modo="erro")
+    r = post_form(logado, "/voz/emerson-teste/testar", texto="x")
+    assert r.status_code == 502 and "HTTP 500" in r.json()["erro"]
+    fake.set(voz_modo="")
+    assert post_form(logado, "/voz/nao-existe/testar", texto="x").status_code == 404
+
+
+def test_voz_servidor_ok_e_exclusao_limpa_padrao(logado, fake):
+    pg = ver(logado, "/voz")
+    assert "Servidor respondendo" in pg, "servidor genérico (sem /health) também conta como de pé"
+    post_form(logado, "/voz/emerson-teste/excluir")
+    assert not (C.DATA / "vozes" / "emerson-teste").exists() and db.get_setting("tts_voz") == ""
+    post_form(logado, "/voz/outra-pessoa/excluir")
+    assert "Nenhuma voz ainda" in ver(logado, "/voz")
+    post_form(logado, "/voz/emerson-teste/padrao")
+    assert "ainda não tem amostra pronta" in _flashes(logado.get("/voz").text)
+    _voz_cfg(logado, whisper=False, tts=False)

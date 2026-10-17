@@ -90,15 +90,15 @@ def estimar(texto: str, duracao: float) -> list[dict]:
     return _distribuir(texto.split(), 0.0, duracao)
 
 
-async def narrar(texto: str) -> Path:
-    """Fala o texto com o servidor de voz. Devolve um áudio mp3 em data/tmp."""
+async def narrar(texto: str, voz: str | None = None) -> Path:
+    """Fala o texto com o servidor de voz (voz padrão de Conexões, ou a indicada). Devolve um áudio mp3 em data/tmp."""
     c = _cfg("tts")
     if not c["url"]:
         raise VozError("voz não configurada (Conexões → Voz)")
     texto = re.sub(r"\s+", " ", texto).strip()
     if not texto:
         raise VozError("narração vazia")
-    corpo = {"model": c["modelo"] or "tts-1", "input": texto[:4000], "voice": c["voz"] or "alloy", "response_format": "mp3"}
+    corpo = {"model": c["modelo"] or "tts-1", "input": texto[:4000], "voice": voz or c["voz"] or "alloy", "response_format": "mp3"}
     try:
         async with httpx.AsyncClient(timeout=600) as cli:
             r = await cli.post(_endpoint(c["url"], "audio/speech"), headers=_headers(c), json=corpo)

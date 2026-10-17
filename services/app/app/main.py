@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import banco, config as C, crypto, db, ig, llm, marca as marca_mod, midia, pipeline, publico, render, scheduler, seed, settings, supervisor, telegram, voz
+from . import banco, config as C, crypto, db, ig, llm, marca as marca_mod, midia, pipeline, publico, render, scheduler, seed, settings, supervisor, telegram, voz, vozes
 from .tunnel import tunel
 
 WEB = Path(__file__).parent / "web"
@@ -360,6 +360,124 @@ async def musicas_remover(request: Request):
         alvo.unlink()
         flash(request, "Música removida.")
     return voltar(request, "/musicas")
+
+# ---------- vozes (clonagem) ----------
+def _csrf_ok(request: Request, dados) -> None:
+    if not secrets.compare_digest(str(dados.get("csrf", "")), request.session.get("csrf", "-")):
+        raise HTTPException(403, "CSRF inválido")
+
+
+@app.get("/voz")
+async def voz_page(request: Request):
+    logado(request)
+    return render_page(request, "voz.html", vozes=vozes.listar(), servidor=await vozes.estado_servidor(), texto_leitura=vozes.TEXTO_LEITURA,
+                       url_local=vozes.URL_SERVIDOR_LOCAL, whisper_ok=voz.whisper_ok(), tts_ok=voz.tts_ok())
+
+
+@app.post("/voz/adicionar")
+async def voz_adicionar(request: Request):
+    logado(request)
+    dados = await request.form()
+    _csrf_ok(request, dados)
+    nome = str(dados.get("nome") or "")
+    arqs = [a for a in dados.getlist("arquivo") if getattr(a, "filename", "")]
+    if not arqs:
+        flash(request, "Grave ou escolha pelo menos um áudio.", "erro")
+        return voltar(request, "/voz")
+    ok = 0
+    for a in arqs:
+        try:
+            await vozes.adicionar(nome, await a.read(), a.filename, dono=str(dados.get("dono") or "propria"),
+                                  autor=str(dados.get("autor") or ""), consentimento=bool(dados.get("consentimento")))
+            ok += 1
+        except vozes.VozesError as e:
+            flash(request, f"{a.filename}: {e}.", "erro")
+    if ok:
+        m = vozes.obter(vozes.slug(nome)) or {}
+        flash(request, f"{ok} gravação(ões) processada(s). Amostra de {m.get('dur_ref', 0):.0f} s.")
+        for av in m.get("avisos", []):
+            flash(request, av, "aviso")
+        db.log(None, None, "voz_amostra", vozes.slug(nome))
+    return voltar(request, "/voz")
+
+
+@app.get("/voz/{sl}/amostra.wav")
+def voz_amostra(request: Request, sl: str):
+    logado(request)
+    try:
+        f = vozes.ref_path(sl)
+    except vozes.VozesError:
+        f = None
+    if not f:
+        raise HTTPException(404)
+    return FileResponse(f, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/voz/{sl}/take/{n}/remover")
+async def voz_take_remover(request: Request, sl: str, n: int):
+    logado(request)
+    await form(request)
+    try:
+        await vozes.remover_take(sl, n)
+        flash(request, "Gravação removida.")
+    except vozes.VozesError as e:
+        flash(request, f"{e}.", "erro")
+    return voltar(request, "/voz")
+
+
+@app.post("/voz/{sl}/padrao")
+async def voz_padrao(request: Request, sl: str):
+    logado(request)
+    await form(request)
+    try:
+        vozes.definir_padrao(sl)
+        flash(request, "Voz padrão definida. As narrações novas usam essa voz.")
+    except vozes.VozesError as e:
+        flash(request, f"{e}.", "erro")
+    return voltar(request, "/voz")
+
+
+@app.post("/voz/{sl}/excluir")
+async def voz_excluir(request: Request, sl: str):
+    logado(request)
+    await form(request)
+    try:
+        vozes.excluir(sl)
+        flash(request, "Voz apagada (gravações e amostra).")
+    except vozes.VozesError as e:
+        flash(request, f"{e}.", "erro")
+    return voltar(request, "/voz")
+
+
+@app.post("/voz/{sl}/testar")
+async def voz_testar(request: Request, sl: str):
+    logado(request)
+    f = await form(request)
+    from fastapi.responses import JSONResponse, Response
+    if not vozes.obter(sl):
+        return JSONResponse({"erro": "voz não encontrada"}, status_code=404)
+    texto = (f.get("texto") or "").strip()[:400] or "Olá! Essa é a minha voz clonada, falando direto do meu computador."
+    try:
+        audio = await voz.narrar(texto, voz=sl)
+    except voz.VozError as e:
+        return JSONResponse({"erro": str(e)}, status_code=502)
+    try:
+        return Response(audio.read_bytes(), media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+    finally:
+        audio.unlink(missing_ok=True)
+
+
+@app.post("/voz/servidor/usar")
+async def voz_servidor_usar(request: Request):
+    logado(request)
+    await form(request)
+    db.set_setting("whisper_url", vozes.URL_SERVIDOR_LOCAL)
+    db.set_setting("whisper_model", "whisper-1")
+    db.set_setting("tts_url", vozes.URL_SERVIDOR_LOCAL)
+    db.set_setting("tts_model", "chatterbox")
+    flash(request, "Transcrição e voz apontadas para o servidor local (GPU). Suba-o com: docker compose --profile gpu up -d --build")
+    return voltar(request, "/voz")
+
 
 # ---------- perfis ----------
 @app.get("/perfis")
