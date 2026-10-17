@@ -4,7 +4,7 @@
   GET  /health
 Dois motores de voz (variável ENGINE): "chatterbox" (padrão, MIT) ou "qwen" (Qwen3-TTS, Apache 2.0). Mesma API nos dois.
 As amostras ficam em DATA_DIR/vozes/<nome>/ref.wav e ref.txt (volume compartilhado com o app, somente leitura aqui)."""
-import io, os, re, subprocess, threading, wave
+import gc, io, os, re, subprocess, threading, time, wave
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +13,8 @@ from fastapi.responses import JSONResponse, Response
 
 DATA = Path(os.getenv("DATA_DIR", "/data"))
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "large-v3-turbo")
-PRELOAD = os.getenv("PRELOAD", "1") == "1"
+PRELOAD = os.getenv("PRELOAD", "0") == "1"          # por padrão carrega só no primeiro uso, para não ocupar a placa à toa
+IDLE_MIN = float(os.getenv("IDLE_MIN", "10"))        # minutos sem uso até descarregar os modelos da placa (0 = nunca)
 IDIOMA_TTS = os.getenv("TTS_LANG", "pt")
 ENGINE = os.getenv("ENGINE", "chatterbox").lower()
 QWEN_MODEL = os.getenv("QWEN_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
@@ -23,6 +24,8 @@ MAX_CHARS = 220          # o modelo fala bem trechos curtos; textos longos são 
 
 app = FastAPI(title="ic-ap voz", docs_url=None, redoc_url=None, openapi_url=None)
 _lock = threading.Lock()          # uma geração por vez na GPU
+_ultimo_uso = [time.time()]
+_cache = {"ref": None, "prompt": None, "txt": {}}
 _estado = {"whisper": None, "whisper_info": "não carregado", "tts": None, "tts_info": "não carregado", "gpu": None, "erro": ""}
 
 
@@ -75,6 +78,36 @@ def _carregar_tts():
     return _estado["tts"]
 
 
+def _tocar() -> None:
+    _ultimo_uso[0] = time.time()
+
+
+def _descarregar() -> bool:
+    """Tira Whisper e voz da memória da placa (o próximo uso recarrega). Só roda se não houver geração em andamento."""
+    if not _lock.acquire(blocking=False):
+        return False
+    try:
+        _estado.update(whisper=None, whisper_info="descarregado", tts=None, tts_info="descarregado")
+        _cache.update(ref=None, prompt=None, txt={})
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:      # noqa: BLE001
+            pass
+        return True
+    finally:
+        _lock.release()
+
+
+def _vigia_ociosidade() -> None:
+    while True:
+        time.sleep(30)
+        if IDLE_MIN > 0 and time.time() - _ultimo_uso[0] > IDLE_MIN * 60 and (_estado["tts"] is not None or _estado["whisper"] is not None):
+            _descarregar()
+
+
 def _pre_carregar():
     for f in (_carregar_tts, _carregar_whisper):
         try:
@@ -87,6 +120,7 @@ def _pre_carregar():
 @app.on_event("startup")
 def _inicio():
     _estado["gpu"] = _gpu()
+    threading.Thread(target=_vigia_ociosidade, daemon=True).start()
     if PRELOAD:
         threading.Thread(target=_pre_carregar, daemon=True).start()
 
@@ -94,13 +128,22 @@ def _inicio():
 @app.get("/health")
 def health():
     return {"ok": True, "motor": ENGINE, "gpu": _estado["gpu"] or _gpu(), "whisper": _estado["whisper_info"], "tts": _estado["tts_info"],
-            "clonagem": True, "erro": _estado["erro"] or None}
+            "clonagem": True, "ociosidade_min": IDLE_MIN, "carregado": _estado["tts"] is not None or _estado["whisper"] is not None,
+            "erro": _estado["erro"] or None}
+
+
+@app.post("/descarregar")
+def descarregar():
+    if not _descarregar():
+        raise HTTPException(409, "há uma geração em andamento; tente de novo em instantes")
+    return {"ok": True}
 
 
 # ---------- transcrição ----------
 @app.post("/v1/audio/transcriptions")
 def transcrever(file: UploadFile = File(...), language: str = Form("pt"), model: str = Form(""),
                 response_format: str = Form("verbose_json")):
+    _tocar()
     tmp = Path("/tmp") / f"in_{os.getpid()}_{threading.get_ident()}_{file.filename or 'a'}"
     tmp.write_bytes(file.file.read())
     try:
@@ -150,9 +193,6 @@ def _wav_bytes(x: np.ndarray, sr: int) -> bytes:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
         w.writeframes((np.clip(x, -1, 1) * 32767).astype(np.int16).tobytes())
     return buf.getvalue()
-
-
-_cache = {"ref": None, "prompt": None, "txt": {}}
 
 
 def _texto_da_ref(sl: str, ref: Path) -> str:
@@ -214,6 +254,7 @@ def falar(corpo: dict):
         raise HTTPException(400, "texto vazio")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", voz):
         raise HTTPException(400, "voz inválida: crie uma voz na aba Voz do painel e escolha-a como padrão")
+    _tocar()
     ref = DATA / "vozes" / voz / "ref.wav"
     if not ref.exists():
         raise HTTPException(404, f"a voz “{voz}” não existe aqui: grave a amostra na aba Voz do painel")
@@ -225,6 +266,7 @@ def falar(corpo: dict):
                 torch.cuda.empty_cache()
     except Exception as e:      # noqa: BLE001
         raise HTTPException(500, f"falha ao gerar a voz: {e}")
+    _tocar()
     pausa = np.zeros(int(sr * 0.18), dtype=np.float32)
     partes = [x for p in partes for x in (p, pausa)]
     wav_b = _wav_bytes(np.concatenate(partes), sr)

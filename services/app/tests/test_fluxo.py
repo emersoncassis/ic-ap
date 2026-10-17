@@ -1496,9 +1496,21 @@ def test_voz_testar_usa_o_nome_da_voz_e_padrao_vai_para_conexoes(logado, fake):
     assert post_form(logado, "/voz/nao-existe/testar", texto="x").status_code == 404
 
 
+def test_voz_botao_descarregar_libera_a_placa(logado, fake):
+    _voz_cfg(logado, whisper=False, tts=False)
+    post_form(logado, "/voz/servidor/descarregar")
+    assert "não configurado" in _flashes(logado.get("/voz").text)
+    _voz_cfg(logado, whisper=False, tts=True)
+    antes = len(fake.st()["voz"])
+    post_form(logado, "/voz/servidor/descarregar")
+    assert fake.st()["voz"][antes][0] == "descarregar" and "placa de vídeo está livre" in _flashes(logado.get("/voz").text)
+
+
 def test_voz_servidor_ok_e_exclusao_limpa_padrao(logado, fake):
     pg = ver(logado, "/voz")
     assert "Servidor respondendo" in pg, "servidor genérico (sem /health) também conta como de pé"
+    post_form(logado, "/voz/emerson-teste/padrao")
+    assert db.get_setting("tts_voz") == "emerson-teste"
     post_form(logado, "/voz/emerson-teste/excluir")
     assert not (C.DATA / "vozes" / "emerson-teste").exists() and db.get_setting("tts_voz") == ""
     post_form(logado, "/voz/outra-pessoa/excluir")

@@ -18,6 +18,12 @@
   {% else %}
     <p><b class="err">● Sem resposta</b> de <code>{{ servidor.url }}</code>. Se for o servidor local, confira com <code>docker compose --profile gpu ps</code> e <code>docker compose logs voz</code>. Na primeira subida ele demora para baixar os modelos.</p>
   {% endif %}
+  {% if servidor.ok and not servidor.generico %}
+  <div class="acts" style="align-items:center">
+    <form method="post" action="/voz/servidor/descarregar"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" {% if not servidor.carregado %}class="sec" disabled{% else %}class="sec"{% endif %}>⏏ Liberar a placa (descarregar modelos)</button></form>
+    <span class="mut">{% if servidor.carregado %}Modelos carregados na memória.{% else %}Modelos fora da memória da placa; carregam sozinhos no próximo uso.{% endif %} Descarregam sozinhos após {{ servidor.ociosidade_min|int }} min parado.</span>
+  </div>
+  {% endif %}
   <div class="acts">
     <form method="post" action="/voz/servidor/usar"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="motor" value="chatterbox">
       <button class="sec" type="submit">Usar Chatterbox ({{ url_local }})</button></form>
@@ -111,7 +117,9 @@
         <button type="button" class="resetaj sec">Voltar ao padrão</button>
       </div>
     </details>
-    <div class="acts"><button type="button" class="ouvir">▶ Gerar e ouvir</button><span class="st mut"></span></div>
+    <div class="acts"><button type="button" class="ouvir">▶ Gerar e ouvir</button><button type="button" class="tres sec">▶▶▶ Gerar 3 variações</button><span class="st mut"></span></div>
+    <small>Cada geração sai um pouco diferente. Gere 3 e fique com a melhor.</small>
+    <div class="saidas"></div>
     <audio controls style="width:100%;margin-top:8px;display:none"></audio>
   </div>
   {% endif %}
@@ -195,16 +203,28 @@
     };
     box.querySelector('.salvaraj').addEventListener('click', () => enviarAj('salvar'));
     box.querySelector('.resetaj').addEventListener('click', () => enviarAj('padrao'));
-    btn.addEventListener('click', async () => {
-      btn.disabled = true; st.textContent = 'gerando… (a primeira vez carrega o modelo e demora)'; au.style.display = 'none';
+    const saidas = box.querySelector('.saidas'), tres = box.querySelector('.tres');
+    async function pedir() {
       const fd = new FormData(); fd.append('csrf', csrf); fd.append('texto', tx.value); vals().forEach(([k, v]) => fd.append(k, v));
+      const r = await fetch('/voz/' + box.dataset.slug + '/testar', {method: 'POST', body: fd});
+      if (!r.ok) { let e = 'erro ' + r.status; try { e = (await r.json()).erro || e; } catch (_) {} throw new Error(e); }
+      return URL.createObjectURL(await r.blob());
+    }
+    async function gerar(n) {
+      btn.disabled = tres.disabled = true; au.style.display = 'none'; saidas.innerHTML = '';
       try {
-        const r = await fetch('/voz/' + box.dataset.slug + '/testar', {method: 'POST', body: fd});
-        if (!r.ok) { let e = 'erro ' + r.status; try { e = (await r.json()).erro || e; } catch (_) {} st.textContent = e; }
-        else { au.src = URL.createObjectURL(await r.blob()); au.style.display = ''; au.play(); st.textContent = 'pronto'; }
-      } catch (e) { st.textContent = 'falha de rede'; }
-      btn.disabled = false;
-    });
+        for (let i = 1; i <= n; i++) {
+          st.textContent = 'gerando ' + i + ' de ' + n + '… (a primeira vez carrega o modelo e demora)';
+          const url = await pedir();
+          if (n === 1) { au.src = url; au.style.display = ''; au.play(); }
+          else { const d = document.createElement('div'); d.style.marginTop = '8px'; d.innerHTML = '<small>Variação ' + i + '</small><br>'; const a = document.createElement('audio'); a.controls = true; a.style.width = '100%'; a.src = url; d.appendChild(a); saidas.appendChild(d); }
+        }
+        st.textContent = 'pronto';
+      } catch (e) { st.textContent = e.message || 'falha de rede'; }
+      btn.disabled = tres.disabled = false;
+    }
+    btn.addEventListener('click', () => gerar(1));
+    tres.addEventListener('click', () => gerar(3));
   });
 })();
 </script>

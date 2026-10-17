@@ -306,3 +306,24 @@ async def estado_servidor() -> dict:
         return {"configurado": True, "ok": True, "url": url, "generico": True}   # outro servidor (sem /health nosso)
     except (httpx.HTTPError, ValueError):
         return {"configurado": True, "ok": False, "url": url}
+
+
+async def descarregar_servidor() -> None:
+    """Pede ao servidor de voz para tirar os modelos da memória da placa (voltam sozinhos no próximo uso)."""
+    url = db.get_setting("tts_url").strip().rstrip("/")
+    if not url:
+        raise VozesError("servidor de voz não configurado")
+    base = url[:-3] if url.endswith("/v1") else url
+    try:
+        async with httpx.AsyncClient(timeout=30) as cli:
+            r = await cli.post(f"{base}/descarregar")
+    except httpx.HTTPError as e:
+        raise VozesError(f"não consegui falar com o servidor de voz ({type(e).__name__})")
+    if r.status_code == 404:
+        raise VozesError("esse servidor não tem a função de descarregar (só o servidor de voz do ic-ap tem)")
+    if r.status_code >= 400:
+        try:
+            msg = r.json().get("detail", "")
+        except ValueError:
+            msg = ""
+        raise VozesError(msg or f"o servidor respondeu HTTP {r.status_code}")

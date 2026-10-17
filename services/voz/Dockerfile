@@ -6,6 +6,6 @@ WORKDIR /srv
 COPY services/voz/requirements.txt services/voz/requirements-chatterbox.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-chatterbox.txt && pip install --no-cache-dir --no-deps chatterbox-tts==0.1.7
 COPY services/voz/app.py .
-ENV HF_HOME=/modelos DATA_DIR=/data WHISPER_MODEL=large-v3-turbo ENGINE=chatterbox
+ENV HF_HOME=/modelos DATA_DIR=/data WHISPER_MODEL=large-v3-turbo ENGINE=chatterbox PRELOAD=0 IDLE_MIN=10
 EXPOSE 8001
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8001"]

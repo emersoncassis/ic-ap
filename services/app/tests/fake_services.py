@@ -244,6 +244,11 @@ def make(port: int) -> FastAPI:
         return {"text": "Disciplina sustenta o resultado", "words": [{"word": "Disciplina", "start": 0.1, "end": 0.6}, {"word": "sustenta", "start": 0.7, "end": 1.2},
                                                                     {"word": "o", "start": 1.2, "end": 1.3}, {"word": "resultado", "start": 1.4, "end": 2.0}]}
 
+    @app.post("/descarregar")
+    async def descarregar():
+        st["voz"].append(["descarregar", "", {}])
+        return {"ok": True}
+
     @app.post("/v1/audio/speech")
     async def tts(request: Request):
         b = await request.json()

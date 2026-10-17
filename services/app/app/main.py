@@ -489,6 +489,18 @@ async def voz_servidor_usar(request: Request):
     return voltar(request, "/voz")
 
 
+@app.post("/voz/servidor/descarregar")
+async def voz_servidor_descarregar(request: Request):
+    logado(request)
+    await form(request)
+    try:
+        await vozes.descarregar_servidor()
+        flash(request, "Modelos descarregados: a placa de vídeo está livre. Eles recarregam sozinhos no próximo uso.")
+    except vozes.VozesError as e:
+        flash(request, f"{e}.", "erro")
+    return voltar(request, "/voz")
+
+
 @app.post("/voz/{sl}/limpeza")
 async def voz_limpeza(request: Request, sl: str):
     logado(request)
