@@ -47,7 +47,12 @@ class LLMError(Exception):
 def _erro_http(e: Exception, url: str) -> LLMError:
     if isinstance(e, httpx.HTTPStatusError):
         corpo = e.response.text[:200].replace("\n", " ")
-        return LLMError(f"HTTP {e.response.status_code} em {url}: {corpo}")
+        dica = ""
+        if "API key not valid" in e.response.text or "API_KEY_INVALID" in e.response.text:
+            dica = " → A chave de API foi recusada: confira se copiou inteira, sem espaços, ou gere uma nova em aistudio.google.com/apikey."
+        elif e.response.status_code in (401, 403) and "unregistered callers" in e.response.text:
+            dica = " → A chamada foi sem chave de API: edite a conexão no menu LLM e cole a chave."
+        return LLMError(f"HTTP {e.response.status_code} em {url}: {corpo}{dica}")
     if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
         return LLMError(f"não consegui conectar em {url}.{DICA_DOCKER}")
     return LLMError(f"{type(e).__name__} em {url}: {e}")
@@ -227,6 +232,8 @@ async def testar(con: dict) -> dict:
             return {"ok": True, "segundos": round(time.time() - t0, 1), "manchete": d["manchete_curta"]}
         except ValueError as e:
             ultimo = str(e)
+        except LLMError as e:     # chave inválida, servidor fora do ar etc.: mostra o motivo em vez de dar erro 500
+            return {"ok": False, "segundos": round(time.time() - t0, 1), "erro": str(e)}
     return {"ok": False, "segundos": round(time.time() - t0, 1), "erro": f"o modelo respondeu, mas fora do formato: {ultimo}"}
 
 

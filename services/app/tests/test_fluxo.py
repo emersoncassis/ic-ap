@@ -148,6 +148,8 @@ def test_llm_gemini_sem_chave_da_erro_claro_e_nao_salva(logado):
     from app import llm
     with pytest.raises(llm.LLMError, match="sem chave de API"):
         asyncio.run(llm._chat({"tipo": "gemini", "modelo": "g-flash", "base_url": "", "nome": "Meu Gemini", "api_key": ""}, "s", "oi", 0.5))
+    r0 = asyncio.run(llm.testar({"tipo": "gemini", "modelo": "g-flash", "base_url": "", "nome": "G", "api_key": ""}))
+    assert r0["ok"] is False and "sem chave de API" in r0["erro"], "o teste da conexão devolve o motivo, não dá erro 500"
     antes = len(db.q("SELECT id FROM llm_conexoes"))
     r = post_form(logado, "/llm/editar", acao="aplicar", nome="SemChave", tipo="gemini", base_url="", modelo="g-flash", api_key="")
     assert "Informe a chave de API" in r.text and len(db.q("SELECT id FROM llm_conexoes")) == antes
