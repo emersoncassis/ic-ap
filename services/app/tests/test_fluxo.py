@@ -1318,3 +1318,36 @@ def test_video_ia_sem_creditos_ou_sem_url_publica_avisa_e_segue_com_a_foto(logad
     p = _novo_post(n)
     esperar(lambda: any(m == "sendPhoto" and "Higgsfield não configurado" in d["caption"] and "ia:" not in _botoes(d) for m, d in fake.st()["tg"]))
     post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_agendar_pelo_telegram_escolhe_horarios_livres_do_perfil(logado, fake):
+    configurar_perfil(logado)  # horários 09:00 e 18:00
+    n = _n_midia()
+    fake.push_msg(42, "foto", "feed: treino de hoje")
+    p = _novo_post(n)
+    esperar(lambda: any(m == "sendPhoto" and "ag:" in _botoes(d) and "Agendar" in _botoes(d) for m, d in fake.st()["tg"]))
+    fake.push(f"ag:{p['id']}", "42")
+    menu = esperar(lambda: next((d for m, d in fake.st()["tg"] if m == "sendMessage" and "Quando publicar o post" in d["text"]), None))
+    botoes = _botoes(menu)
+    assert botoes.count("as:") == 4 and f"as:{p['id'] * 10}" in botoes
+    fake.push(f"as:{p['id'] * 10 + 1}", "42")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "agendado")
+    ag = pipeline.post(p["id"])["agendado_para"]
+    assert ag and datetime.strptime(ag, "%Y-%m-%d %H:%M:%S") > datetime.utcnow()
+    esperar(lambda: any(m == "sendMessage" and "Agendado para" in d["text"] for m, d in fake.st()["tg"]))
+    # o horário escolhido deixa de ser oferecido ao próximo post
+    n = _n_midia()
+    fake.push_msg(42, "foto", "feed: outro treino")
+    p2 = _novo_post(n)
+    antes = len([1 for m, d in fake.st()["tg"] if m == "sendMessage" and "Quando publicar" in d["text"]])
+    fake.push(f"ag:{p2['id']}", "42")
+    esperar(lambda: len([1 for m, d in fake.st()["tg"] if m == "sendMessage" and "Quando publicar" in d["text"]]) == antes + 1)
+    outro = pipeline.proximos_horarios(pipeline.perfil(1), 4)
+    assert pipeline._utc(outro[0], settings.tz()) != ag and all(pipeline._utc(q, settings.tz()) != ag for q in outro)
+    # só o dono do chat agenda
+    fake.push(f"as:{p2['id'] * 10}", "999")
+    import time; time.sleep(1)
+    assert pipeline.post(p2["id"])["estado"] == "aguardando_aprovacao"
+    pipeline.desagendar(p["id"])
+    for x in (p, p2):
+        post_form(logado, f"/posts/{x['id']}/descartar")

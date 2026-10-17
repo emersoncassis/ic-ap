@@ -36,7 +36,8 @@ async def enviar_card(chat_id: str, arquivo, post_id: int, legenda: str, aviso: 
 
 def _TECLADO(post_id: int, imagem: bool = False) -> dict:
     linhas = [[{"text": "✅ Postar", "callback_data": f"ap:{post_id}"},
-               {"text": "🔄 Refazer", "callback_data": f"rf:{post_id}"},
+               {"text": "🕒 Agendar", "callback_data": f"ag:{post_id}"}],
+              [{"text": "🔄 Refazer", "callback_data": f"rf:{post_id}"},
                {"text": "🗑 Descartar", "callback_data": f"ds:{post_id}"}]]
     po = db.one("SELECT formato FROM posts WHERE id=?", (post_id,)) if imagem else None
     if po and po["formato"] in ("feed", "story"):

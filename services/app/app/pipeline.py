@@ -229,6 +229,22 @@ async def acao_telegram(acao: str, post_id: int, chat_id: str) -> None:
     if acao in ("sp", "np"):  # confirmar / ajustar o perfil proposto na conversa (post_id é o id do perfil)
         await _acao_perfil(acao, post_id, chat_id)
         return
+    if acao == "as":  # horário escolhido: post_id vem como id*10 + posição do horário
+        post_id, pos = divmod(post_id, 10)
+        po = post(post_id)
+        p = perfil(po["perfil_id"]) if po else None
+        if not p or str(p["telegram_chat_id"]) != chat_id:
+            return
+        slots = proximos_horarios(p)
+        if pos >= len(slots) or po["estado"] not in ESTADOS_ABERTOS:
+            await telegram.avisar(chat_id, "Esse horário já não está livre ou o post mudou. Toque em 🕒 Agendar de novo.")
+            return
+        if agendar([post_id], slots[pos], 0):
+            quando = local(post(post_id)["agendado_para"])
+            db.log(p["id"], post_id, "agendado", f"telegram {quando}")
+            if po["tg_message_id"]:
+                await telegram.marcar(chat_id, po["tg_message_id"], f"🕒 Agendado para {quando}.")
+        return
     po = post(post_id)
     p = perfil(po["perfil_id"]) if po else None
     if not p or str(p["telegram_chat_id"]) != chat_id:
@@ -239,6 +255,14 @@ async def acao_telegram(acao: str, post_id: int, chat_id: str) -> None:
         await refazer(post_id)
     elif acao == "ds":
         await descartar(post_id, "telegram")
+    elif acao == "ag":  # menu de horários livres
+        slots = proximos_horarios(p)
+        if not slots or po["estado"] not in ESTADOS_ABERTOS:
+            await telegram.avisar(chat_id, "Esse post não pode ser agendado agora.")
+            return
+        rot = lambda q: datetime.strptime(q, "%Y-%m-%dT%H:%M").strftime("%d/%m %H:%M")
+        await telegram.enviar_botoes(chat_id, f"Quando publicar o post #{post_id}? (fuso {settings.tz()})",
+                                     [[(rot(q), f"as:{post_id * 10 + i}")] for i, q in enumerate(slots)])
     elif acao == "ia":  # versão em vídeo por IA (demora minutos: roda em segundo plano)
         asyncio.create_task(animar_post(post_id))
     elif acao == "ad":  # copia o post para o outro formato (feed <-> story)
@@ -328,6 +352,25 @@ def agendar(ids: list[int], quando_local: str, intervalo_min: int = 60) -> int:
     return feitos
 
 
+def proximos_horarios(p: dict, n: int = 4) -> list[str]:
+    """Próximos n horários livres do perfil ('YYYY-MM-DDTHH:MM', fuso configurado), pelos horários de postagem dele, sem repetir horário já agendado."""
+    from datetime import timedelta
+    tz = ZoneInfo(settings.tz())
+    horas = [h for h in (p.get("horarios") or "").split(",") if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", h.strip())] or ["09:00", "18:00"]
+    ocupados = {r["agendado_para"] for r in db.q("SELECT agendado_para FROM posts WHERE estado='agendado' AND perfil_id=?", (p["id"],))}
+    agora = datetime.now(tz) + timedelta(minutes=5)
+    out = []
+    for dia in range(0, 15):
+        for h in sorted(x.strip() for x in horas):
+            d = datetime.strptime(f"{(agora + timedelta(days=dia)).strftime('%Y-%m-%d')} {h}", "%Y-%m-%d %H:%M").replace(tzinfo=tz)
+            quando = f"{d.strftime('%Y-%m-%dT%H:%M')}"
+            if d > agora and _utc(quando, settings.tz()) not in ocupados:
+                out.append(quando)
+                if len(out) == n:
+                    return out
+    return out
+
+
 def desagendar(post_id: int) -> bool:
     return db.x("UPDATE posts SET estado='rascunho', agendado_para=NULL, atualizado_em=? WHERE id=? AND estado='agendado'",
                 (db.now(), post_id)) == 1
@@ -358,6 +401,7 @@ AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
          "• Vídeo: “corta os silêncios”, “legenda animada” (precisa de Transcrição em Conexões). Foto: “narra: …” ou só “com narração” (precisa de Voz em Conexões)\n"
          "• Marca: “meu fundo é azul escuro #0b1f3a e o destaque é amarelo”; logotipo: envie o arquivo com a legenda “logo”\n"
          "• Citação: “faz uma citação sobre X” (com “foto de fundo” usa banco de imagens); meme: “meme sobre X”, ou envie sua foto com a legenda “meme: …”\n"
+         "• Botão 🕒 Agendar em cada card escolhe o próximo horário livre do perfil\n"
          "• Botão 📐 em cada card copia o post para Story/Feed sem cortar a imagem; 🎬 transforma a sua foto em vídeo por IA (Higgsfield, gasta créditos). Na legenda da foto: “vídeo com IA”\n"
          "• /novo zera a conversa")
 
