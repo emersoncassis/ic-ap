@@ -143,6 +143,16 @@ def test_llm_chave_guardada_criptografada_e_reutilizada(logado, fake):
     assert fake.st()["openai_keys"][-1] == "Bearer sk-local-123", "chave em branco deve manter a salva"
 
 
+def test_llm_gemini_sem_chave_da_erro_claro_e_nao_salva(logado):
+    import asyncio
+    from app import llm
+    with pytest.raises(llm.LLMError, match="sem chave de API"):
+        asyncio.run(llm._chat({"tipo": "gemini", "modelo": "g-flash", "base_url": "", "nome": "Meu Gemini", "api_key": ""}, "s", "oi", 0.5))
+    antes = len(db.q("SELECT id FROM llm_conexoes"))
+    r = post_form(logado, "/llm/editar", acao="aplicar", nome="SemChave", tipo="gemini", base_url="", modelo="g-flash", api_key="")
+    assert "Informe a chave de API" in r.text and len(db.q("SELECT id FROM llm_conexoes")) == antes
+
+
 def test_llm_ollama_gemini_anthropic(logado, fake):
     r = post_form(logado, "/llm/editar", acao="detectar", nome="Ollama", tipo="ollama", base_url=FAKE, api_key="")
     assert "teste:7b" in r.text

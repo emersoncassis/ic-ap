@@ -116,6 +116,8 @@ async def _chat(con: dict, system: str, user: str, temperature: float, schema: d
     tipo, modelo, base, key = con["tipo"], con["modelo"], con["base_url"].rstrip("/"), con.get("api_key", "")
     if not modelo:
         raise LLMError("a conexão não tem modelo escolhido")
+    if tipo in ("gemini", "anthropic") and not str(key or "").strip():
+        raise LLMError(f"a conexão “{con.get('nome', tipo)}” está sem chave de API: abra o menu LLM, edite a conexão, cole a chave e clique em Aplicar e testar")
     turnos = _alternar([*(historico or []), {"role": "user", "content": user}])
     msgs = [{"role": "system", "content": system}, *turnos]
     async with httpx.AsyncClient(timeout=300) as c:

@@ -730,6 +730,9 @@ async def llm_editar(request: Request):
     if v["tipo"] in ("openai", "ollama") and not v["base_url"].startswith(("http://", "https://")):
         flash(request, "Informe a URL do servidor (começa com http:// ou https://).", "erro")
         return pagina()
+    if v["tipo"] in ("gemini", "anthropic") and not chave:
+        flash(request, "Informe a chave de API (Gemini ou Anthropic exigem chave).", "erro")
+        return pagina()
     if existente:
         db.x("UPDATE llm_conexoes SET nome=?,tipo=?,base_url=?,api_key_enc=?,modelo=? WHERE id=?",
              (v["nome"], v["tipo"], v["base_url"], crypto.enc(chave), v["modelo"], existente["id"]))
