@@ -371,7 +371,7 @@ def _csrf_ok(request: Request, dados) -> None:
 async def voz_page(request: Request):
     logado(request)
     return render_page(request, "voz.html", vozes=vozes.listar(), servidor=await vozes.estado_servidor(), texto_leitura=vozes.TEXTO_LEITURA,
-                       url_local=vozes.URL_SERVIDOR_LOCAL, whisper_ok=voz.whisper_ok(), tts_ok=voz.tts_ok())
+                       url_local=vozes.URL_SERVIDOR_LOCAL, url_qwen=vozes.URL_SERVIDOR_QWEN, whisper_ok=voz.whisper_ok(), tts_ok=voz.tts_ok())
 
 
 @app.post("/voz/adicionar")
@@ -457,8 +457,14 @@ async def voz_testar(request: Request, sl: str):
     if not vozes.obter(sl):
         return JSONResponse({"erro": "voz não encontrada"}, status_code=404)
     texto = (f.get("texto") or "").strip()[:400] or "Olá! Essa é a minha voz clonada, falando direto do meu computador."
+    def num(k):
+        try:
+            return float(f[k]) if f.get(k, "") != "" else None
+        except ValueError:
+            return None
+    extra = {"cfg_weight": num("cfg"), "exaggeration": num("exag"), "temperature": num("temp")}
     try:
-        audio = await voz.narrar(texto, voz=sl)
+        audio = await voz.narrar(texto, voz=sl, extra=extra)
     except voz.VozError as e:
         return JSONResponse({"erro": str(e)}, status_code=502)
     try:
@@ -470,12 +476,61 @@ async def voz_testar(request: Request, sl: str):
 @app.post("/voz/servidor/usar")
 async def voz_servidor_usar(request: Request):
     logado(request)
-    await form(request)
-    db.set_setting("whisper_url", vozes.URL_SERVIDOR_LOCAL)
+    f = await form(request)
+    qwen = f.get("motor") == "qwen"
+    url = vozes.URL_SERVIDOR_QWEN if qwen else vozes.URL_SERVIDOR_LOCAL
+    db.set_setting("whisper_url", url)
     db.set_setting("whisper_model", "whisper-1")
-    db.set_setting("tts_url", vozes.URL_SERVIDOR_LOCAL)
-    db.set_setting("tts_model", "chatterbox")
-    flash(request, "Transcrição e voz apontadas para o servidor local (GPU). Suba-o com: docker compose --profile gpu up -d --build")
+    db.set_setting("tts_url", url)
+    db.set_setting("tts_model", "qwen3-tts" if qwen else "chatterbox")
+    perfil = "qwen" if qwen else "gpu"
+    flash(request, f"Transcrição e voz apontadas para o servidor local ({'Qwen3-TTS' if qwen else 'Chatterbox'}). "
+                   f"Suba-o com: docker compose --profile {perfil} up -d --build (e pare o outro motor, para não faltar memória da placa).")
+    return voltar(request, "/voz")
+
+
+@app.post("/voz/{sl}/limpeza")
+async def voz_limpeza(request: Request, sl: str):
+    logado(request)
+    f = await form(request)
+    try:
+        await vozes.reprocessar(sl, f.get("modo", "leve"))
+        flash(request, f"Amostra refeita com limpeza {'forte' if f.get('modo') == 'forte' else 'leve'}.")
+    except (vozes.VozesError, midia.MidiaError) as e:
+        flash(request, f"{e}.", "erro")
+    return voltar(request, "/voz")
+
+
+@app.post("/voz/{sl}/texto")
+async def voz_texto(request: Request, sl: str):
+    logado(request)
+    f = await form(request)
+    try:
+        vozes.salvar_texto_ref(sl, f.get("texto", ""))
+        flash(request, "Texto da amostra salvo.")
+    except vozes.VozesError as e:
+        flash(request, f"{e}.", "erro")
+    return voltar(request, "/voz")
+
+
+@app.post("/voz/{sl}/ajustes")
+async def voz_ajustes(request: Request, sl: str):
+    logado(request)
+    f = await form(request)
+    def num(k):
+        try:
+            return float(f[k]) if f.get(k, "") != "" else None
+        except ValueError:
+            return None
+    try:
+        if f.get("acao") == "padrao":
+            vozes.definir_ajustes(sl, None, None, None)
+            flash(request, "Ajustes voltaram ao padrão do servidor.")
+        else:
+            vozes.definir_ajustes(sl, num("cfg"), num("exag"), num("temp"))
+            flash(request, "Ajustes salvos para essa voz (valem para todas as narrações).")
+    except vozes.VozesError as e:
+        flash(request, f"{e}.", "erro")
     return voltar(request, "/voz")
 
 

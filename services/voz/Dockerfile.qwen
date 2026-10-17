@@ -1,0 +1,11 @@
+# Servidor de voz local (GPU), motor QWEN3-TTS (Apache 2.0): transcrição (faster-whisper) + clonagem de voz em português.
+# O qwen-tts exige transformers 4.57, que conflita com o Chatterbox: por isso é uma imagem separada.
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 sox && rm -rf /var/lib/apt/lists/*
+WORKDIR /srv
+COPY services/voz/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir qwen-tts==0.1.1
+COPY services/voz/app.py .
+ENV HF_HOME=/modelos DATA_DIR=/data WHISPER_MODEL=large-v3-turbo ENGINE=qwen QWEN_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base
+EXPOSE 8001
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8001"]

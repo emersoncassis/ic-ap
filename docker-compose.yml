@@ -36,6 +36,27 @@ services:
               count: all
               capabilities: [gpu]
 
+  # Segundo motor de clonagem, para comparar: Qwen3-TTS (Apache 2.0, português). Rode um motor de cada vez:
+  #   docker compose stop voz && docker compose --profile qwen up -d --build
+  voz-qwen:
+    profiles: ["qwen"]
+    build:
+      context: .
+      dockerfile: services/voz/Dockerfile.qwen
+    restart: unless-stopped
+    environment:
+      - TZ=America/Sao_Paulo
+    volumes:
+      - data:/data:ro
+      - modelos:/modelos
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
 volumes:
   data:
   modelos:

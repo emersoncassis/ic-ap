@@ -2,7 +2,8 @@
   POST /v1/audio/transcriptions  (faster-whisper)
   POST /v1/audio/speech          (Chatterbox Multilingual; o campo "voice" é o nome da voz criada na aba Voz do painel)
   GET  /health
-As amostras ficam em DATA_DIR/vozes/<nome>/ref.wav (volume compartilhado com o app, somente leitura aqui)."""
+Dois motores de voz (variável ENGINE): "chatterbox" (padrão, MIT) ou "qwen" (Qwen3-TTS, Apache 2.0). Mesma API nos dois.
+As amostras ficam em DATA_DIR/vozes/<nome>/ref.wav e ref.txt (volume compartilhado com o app, somente leitura aqui)."""
 import io, os, re, subprocess, threading, wave
 from pathlib import Path
 
@@ -14,6 +15,10 @@ DATA = Path(os.getenv("DATA_DIR", "/data"))
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "large-v3-turbo")
 PRELOAD = os.getenv("PRELOAD", "1") == "1"
 IDIOMA_TTS = os.getenv("TTS_LANG", "pt")
+ENGINE = os.getenv("ENGINE", "chatterbox").lower()
+QWEN_MODEL = os.getenv("QWEN_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+# padrões do Chatterbox (o app pode sobrescrever por voz): cfg menor = mais parecido com a amostra
+CFG_PADRAO, EXAG_PADRAO, TEMP_PADRAO = (float(os.getenv(k, v)) for k, v in (("CFG_PADRAO", "0.3"), ("EXAG_PADRAO", "0.5"), ("TEMP_PADRAO", "0.75")))
 MAX_CHARS = 220          # o modelo fala bem trechos curtos; textos longos são fatiados por frase
 
 app = FastAPI(title="ic-ap voz", docs_url=None, redoc_url=None, openapi_url=None)
@@ -52,10 +57,21 @@ def _carregar_tts():
     if _estado["tts"] is not None:
         return _estado["tts"]
     import torch
-    from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
-    _estado["tts"] = ChatterboxMultilingualTTS.from_pretrained(device=dev)
-    _estado["tts_info"] = f"chatterbox-multilingual ({dev})"
+    cuda = torch.cuda.is_available()
+    if ENGINE == "qwen":
+        from qwen_tts import Qwen3TTSModel
+        m = Qwen3TTSModel.from_pretrained(QWEN_MODEL, device_map="cuda:0" if cuda else "cpu",
+                                          dtype=torch.bfloat16 if cuda else torch.float32)
+        try:
+            langs = m.get_supported_languages() or []
+        except Exception:      # noqa: BLE001
+            langs = []
+        _estado["qwen_lang"] = next((l for l in langs if str(l).lower().startswith("portug")), "Portuguese")
+        _estado["tts"], _estado["tts_info"] = m, f"qwen3-tts ({'cuda' if cuda else 'cpu'})"
+    else:
+        from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+        _estado["tts"] = ChatterboxMultilingualTTS.from_pretrained(device="cuda" if cuda else "cpu")
+        _estado["tts_info"] = f"chatterbox-multilingual ({'cuda' if cuda else 'cpu'})"
     return _estado["tts"]
 
 
@@ -77,7 +93,7 @@ def _inicio():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "gpu": _estado["gpu"] or _gpu(), "whisper": _estado["whisper_info"], "tts": _estado["tts_info"],
+    return {"ok": True, "motor": ENGINE, "gpu": _estado["gpu"] or _gpu(), "whisper": _estado["whisper_info"], "tts": _estado["tts_info"],
             "clonagem": True, "erro": _estado["erro"] or None}
 
 
@@ -136,6 +152,59 @@ def _wav_bytes(x: np.ndarray, sr: int) -> bytes:
     return buf.getvalue()
 
 
+_cache = {"ref": None, "prompt": None, "txt": {}}
+
+
+def _texto_da_ref(sl: str, ref: Path) -> str:
+    """Texto dito na amostra: ref.txt (escrito/corrigido no painel) ou, na falta, transcrição local (guardada em memória)."""
+    t = (ref.parent / "ref.txt")
+    if t.exists() and t.read_text("utf-8").strip():
+        return t.read_text("utf-8").strip()
+    chave = (sl, ref.stat().st_mtime_ns)
+    if chave not in _cache["txt"]:
+        try:
+            m = _carregar_whisper()
+            segs, _ = m.transcribe(str(ref), language="pt", vad_filter=True)
+            _cache["txt"][chave] = " ".join(x.text.strip() for x in segs).strip()
+        except Exception as e:      # noqa: BLE001
+            _estado["erro"] = f"transcrição da amostra: {e}"[:300]
+            _cache["txt"][chave] = ""
+    return _cache["txt"][chave]
+
+
+def _gerar_blocos(blocos: list[str], sl: str, ref: Path, corpo: dict) -> tuple[list, int]:
+    """Gera cada bloco de texto com a voz da amostra. Devolve (pedaços de áudio float32, taxa de amostragem)."""
+    import torch
+    tts = _carregar_tts()
+    saida = []
+    if ENGINE == "qwen":
+        chave = (sl, ref.stat().st_mtime_ns, (ref.parent / "ref.txt").stat().st_mtime_ns if (ref.parent / "ref.txt").exists() else 0)
+        if _cache["ref"] != chave:
+            texto = _texto_da_ref(sl, ref)
+            _cache["prompt"] = tts.create_voice_clone_prompt(ref_audio=str(ref), ref_text=texto or None, x_vector_only_mode=not texto)
+            _cache["ref"] = chave
+        kw = {"temperature": float(corpo["temperature"])} if corpo.get("temperature") is not None else {}
+        sr = 24000
+        for b in blocos:
+            with torch.inference_mode():
+                wavs, sr = tts.generate_voice_clone(text=b, language=_estado.get("qwen_lang", "Portuguese"),
+                                                    voice_clone_prompt=_cache["prompt"], **kw)
+            saida.append(np.asarray(wavs[0], dtype=np.float32).reshape(-1))
+        return saida, int(sr)
+    exag = float(corpo.get("exaggeration", EXAG_PADRAO))
+    cfg = float(corpo.get("cfg_weight", CFG_PADRAO))
+    temp = float(corpo.get("temperature", TEMP_PADRAO))
+    chave = (sl, ref.stat().st_mtime_ns, round(exag, 2))
+    if _cache["ref"] != chave:                    # prepara a voz uma vez e reaproveita nos blocos seguintes
+        tts.prepare_conditionals(str(ref), exaggeration=exag)
+        _cache["ref"] = chave
+    for b in blocos:
+        with torch.inference_mode():
+            wav = tts.generate(b, language_id=IDIOMA_TTS, exaggeration=exag, cfg_weight=cfg, temperature=temp)
+        saida.append(wav.squeeze(0).float().cpu().numpy())
+    return saida, int(tts.sr)
+
+
 @app.post("/v1/audio/speech")
 def falar(corpo: dict):
     texto = str(corpo.get("input") or "").strip()
@@ -151,17 +220,13 @@ def falar(corpo: dict):
     try:
         import torch
         with _lock:
-            tts = _carregar_tts()
-            partes, pausa = [], np.zeros(int(tts.sr * 0.18), dtype=np.float32)
-            for bloco in _fatiar(texto[:4000]):
-                with torch.inference_mode():
-                    wav = tts.generate(bloco, language_id=IDIOMA_TTS, audio_prompt_path=str(ref))
-                partes += [wav.squeeze(0).float().cpu().numpy(), pausa]
-            sr = tts.sr
+            partes, sr = _gerar_blocos(_fatiar(texto[:4000]), voz, ref, corpo)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
     except Exception as e:      # noqa: BLE001
         raise HTTPException(500, f"falha ao gerar a voz: {e}")
+    pausa = np.zeros(int(sr * 0.18), dtype=np.float32)
+    partes = [x for p in partes for x in (p, pausa)]
     wav_b = _wav_bytes(np.concatenate(partes), sr)
     if fmt == "wav":
         return Response(wav_b, media_type="audio/wav")

@@ -90,7 +90,7 @@ def estimar(texto: str, duracao: float) -> list[dict]:
     return _distribuir(texto.split(), 0.0, duracao)
 
 
-async def narrar(texto: str, voz: str | None = None) -> Path:
+async def narrar(texto: str, voz: str | None = None, extra: dict | None = None) -> Path:
     """Fala o texto com o servidor de voz (voz padrão de Conexões, ou a indicada). Devolve um áudio mp3 em data/tmp."""
     c = _cfg("tts")
     if not c["url"]:
@@ -99,6 +99,9 @@ async def narrar(texto: str, voz: str | None = None) -> Path:
     if not texto:
         raise VozError("narração vazia")
     corpo = {"model": c["modelo"] or "tts-1", "input": texto[:4000], "voice": voz or c["voz"] or "alloy", "response_format": "mp3"}
+    from . import vozes
+    corpo.update(vozes.ajustes_de(corpo["voice"]))          # ajustes salvos da voz clonada (se houver)
+    corpo.update({k: v for k, v in (extra or {}).items() if v is not None})
     try:
         async with httpx.AsyncClient(timeout=600) as cli:
             r = await cli.post(_endpoint(c["url"], "audio/speech"), headers=_headers(c), json=corpo)

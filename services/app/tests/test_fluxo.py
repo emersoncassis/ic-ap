@@ -1376,7 +1376,9 @@ def test_aba_voz_aparece_no_menu_e_orienta_sem_servidor(logado):
     pg = ver(logado, "/voz")
     assert 'href="/voz"' in pg and "Nenhum servidor configurado" in pg and "docker compose --profile gpu up" in pg
     post_form(logado, "/voz/servidor/usar")
-    assert db.get_setting("tts_url") == "http://voz:8001" and db.get_setting("whisper_url") == "http://voz:8001"
+    assert db.get_setting("tts_url") == "http://voz:8001" and db.get_setting("whisper_url") == "http://voz:8001" and db.get_setting("tts_model") == "chatterbox"
+    post_form(logado, "/voz/servidor/usar", motor="qwen")
+    assert db.get_setting("tts_url") == "http://voz-qwen:8001" and db.get_setting("tts_model") == "qwen3-tts" and "profile qwen" in _flashes(logado.get("/voz").text)
     pg = ver(logado, "/voz")
     assert "Sem resposta" in pg, "servidor local desligado: a página avisa em vez de quebrar"
     _voz_cfg(logado, whisper=False, tts=False)
@@ -1402,10 +1404,10 @@ def test_voz_amostra_e_limpa_nivelada_e_com_avisos(logado):
     ref = C.DATA / "vozes" / "emerson-teste" / "ref.wav"
     info = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(ref)], capture_output=True, text=True).stdout)
     s = info["streams"][0]
-    assert (s["sample_rate"], s["channels"]) == ("24000", 1)
+    assert (s["sample_rate"], s["channels"]) == ("44100", 1), "limpeza leve (padrão) mantém a taxa alta"
     dur = float(info["format"]["duration"])
     assert 5.0 < dur < 8.0, f"9 s com 1,5 s de silêncio em cada ponta devem encolher (ficou {dur:.1f})"
-    assert "fica melhor com 15 a 30 s" in pg or "grave pelo menos 15 s" in pg
+    assert "melhor com 10 a 20 s" in pg or "grave pelo menos 10 s" in pg
     a = logado.get("/voz/emerson-teste/amostra.wav")
     assert a.status_code == 200 and a.headers["content-type"] == "audio/wav" and a.content[:4] == b"RIFF"
     # segunda gravação soma à primeira; a sem-nome/inexistente dá 404
@@ -1429,6 +1431,47 @@ def test_voz_aviso_de_gravacao_estourada_e_silenciosa(logado):
     for sl in ("estourada", "baixa"):
         post_form(logado, f"/voz/{sl}/excluir")
         assert not (C.DATA / "vozes" / sl).exists()
+
+
+def test_voz_limpeza_forte_transcricao_e_ajustes_finos(logado, fake):
+    import subprocess, json
+    ref = C.DATA / "vozes" / "emerson-teste" / "ref.wav"
+
+    def sr():
+        return json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(ref)], capture_output=True, text=True).stdout)["streams"][0]["sample_rate"]
+
+    def pico():
+        t = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(ref), "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+        return float(re.search(r"max_volume: (-?[\d.]+) dB", t).group(1))
+    assert sr() == "44100" and -4.5 < pico() < -1.5, f"leve só ajusta o volume até ~-3 dB (pico {pico()})"
+    post_form(logado, "/voz/emerson-teste/limpeza", modo="forte")
+    assert sr() == "24000" and "limpeza forte" in ver(logado, "/voz")
+    post_form(logado, "/voz/emerson-teste/limpeza", modo="leve")
+    assert sr() == "44100"
+    # com o Whisper ligado, a amostra é transcrita sozinha; o texto pode ser corrigido na tela
+    _voz_cfg(logado, whisper=True, tts=True)
+    post_form(logado, "/voz/emerson-teste/limpeza", modo="leve")
+    assert (ref.parent / "ref.txt").read_text("utf-8") == "Disciplina sustenta o resultado"
+    assert "Disciplina sustenta o resultado" in ver(logado, "/voz")
+    post_form(logado, "/voz/emerson-teste/texto", texto="  texto   corrigido  ")
+    assert (ref.parent / "ref.txt").read_text("utf-8") == "texto corrigido"
+    # ajustes finos: salvos por voz, limitados a faixas válidas e enviados ao servidor; o teste pode sobrescrever
+    post_form(logado, "/voz/emerson-teste/ajustes", cfg="0.2", exag="0.9", temp="0.6")
+    from app import vozes
+    assert vozes.ajustes_de("emerson-teste") == {"cfg_weight": 0.2, "exaggeration": 0.9, "temperature": 0.6}
+    post_form(logado, "/voz/emerson-teste/ajustes", cfg="9", exag="", temp="0")
+    assert vozes.ajustes_de("emerson-teste") == {"cfg_weight": 1.0, "temperature": 0.1}
+    post_form(logado, "/voz/emerson-teste/ajustes", cfg="0.2", exag="0.9", temp="0.6")
+    antes = len(fake.st()["voz"])
+    post_form(logado, "/voz/emerson-teste/testar", texto="oi", cfg="0.1")
+    corpo = next(x[2] for x in fake.st()["voz"][antes:] if x[0] == "tts")
+    assert corpo["voice"] == "emerson-teste" and corpo["cfg_weight"] == 0.1 and corpo["exaggeration"] == 0.9 and corpo["temperature"] == 0.6
+    post_form(logado, "/voz/emerson-teste/ajustes", acao="padrao")
+    assert vozes.ajustes_de("emerson-teste") == {}
+    antes = len(fake.st()["voz"])
+    post_form(logado, "/voz/emerson-teste/testar", texto="oi")
+    corpo = next(x[2] for x in fake.st()["voz"][antes:] if x[0] == "tts")
+    assert "cfg_weight" not in corpo and "exaggeration" not in corpo, "sem ajustes salvos, o servidor usa os padrões dele"
 
 
 def test_voz_testar_usa_o_nome_da_voz_e_padrao_vai_para_conexoes(logado, fake):

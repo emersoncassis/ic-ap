@@ -26,7 +26,7 @@ Esqueceu a senha: `docker compose exec app python -m app.reset_senha`.
 - **Foto e vídeo pelo Telegram:** mande uma foto ou vídeo (até 20 MB) com uma frase de contexto. O app corta para 4:5 ou 9:16, escreve a legenda no seu tom e devolve para aprovar. Palavras na legenda mudam o destino: `story`, `reel`, `feed`, `sem música`.
 - **Música:** suba trilhas livres de direitos na aba Músicas; no perfil, ligue “Música nos vídeos do Telegram” e o app mixa uma faixa aleatória (a trilha fica baixa sob o áudio original).
 - **Limites da API do Instagram:** sem sticker de link, enquete ou música da biblioteca do app nos Stories, sem repostar Story de terceiros e sem rascunho do próprio Instagram. Veja `docs/specs/07-midia-agenda.md`.
-- **Voz (clonagem local):** na aba Voz você grava (ou envia) uma amostra, o app limpa o áudio e o servidor `voz` (Chatterbox Multilingual + faster-whisper, na sua GPU NVIDIA) fala e transcreve. Suba com `docker compose --profile gpu up -d --build` e clique em “Usar o servidor local”. Só clone voz sua ou de quem autorizou.
+- **Voz (clonagem local):** na aba Voz você grava (ou envia) uma amostra, o app limpa o áudio e o servidor `voz` (Chatterbox Multilingual + faster-whisper, na sua GPU NVIDIA) fala e transcreve. Suba com `docker compose --profile gpu up -d --build` e clique em “Usar Chatterbox”. Há um segundo motor para comparar, o Qwen3-TTS (`--profile qwen`, Apache 2.0). Rode um por vez (`docker compose stop voz`). A limpeza da amostra é leve por padrão (mais fiel à voz); há ajustes finos de semelhança, expressividade e variação. Só clone voz sua ou de quem autorizou.
 
 ## Testes
 
