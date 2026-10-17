@@ -297,6 +297,10 @@ async def acao_post(request: Request, post_id: int, acao: str):
             return voltar(request)
         flash(request, "Versão criada, veja na fila." if novo else "Esse post não pode ser adaptado (só imagens de feed ou story).", "ok" if novo else "aviso")
         return voltar(request)
+    if acao == "animar-ia":
+        asyncio.create_task(pipeline.animar_post(post_id))
+        flash(request, "Gerando o vídeo por IA em segundo plano (alguns minutos, gasta créditos). Ele aparece na fila quando terminar.", "aviso")
+        return voltar(request)
     fn = {"aprovar": pipeline.aprovar, "refazer": pipeline.refazer, "descartar": pipeline.descartar}.get(acao)
     if not fn:
         raise HTTPException(404)

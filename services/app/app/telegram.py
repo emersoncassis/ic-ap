@@ -3,7 +3,7 @@ import asyncio, json
 
 import httpx
 
-from . import config as C, db, settings
+from . import banco, config as C, db, settings
 
 
 def _url(metodo: str) -> str:
@@ -41,6 +41,9 @@ def _TECLADO(post_id: int, imagem: bool = False) -> dict:
     po = db.one("SELECT formato FROM posts WHERE id=?", (post_id,)) if imagem else None
     if po and po["formato"] in ("feed", "story"):
         linhas.append([{"text": "📐 Versão Story" if po["formato"] == "feed" else "📐 Versão Feed", "callback_data": f"ad:{post_id}"}])
+        foto_sua = db.one("SELECT 1 FROM posts WHERE id=? AND fonte='Telegram'", (post_id,))
+        if foto_sua and banco.higgs_chave():
+            linhas[-1].append({"text": "🎬 Vídeo por IA", "callback_data": f"ia:{post_id}"})
     return {"inline_keyboard": linhas}
 
 

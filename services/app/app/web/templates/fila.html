@@ -31,6 +31,9 @@
       {% if p.arquivo and p.arquivo.endswith('.jpg') and p.formato in ('feed','story') %}
       <form method="post" action="/posts/{{ p.id }}/adaptar-{{ 'story' if p.formato=='feed' else 'feed' }}" style="margin-top:6px"><input type="hidden" name="csrf" value="{{ csrf }}">
         <button class="sec" type="submit">📐 Criar versão {{ 'Story' if p.formato=='feed' else 'Feed' }}</button></form>{% endif %}
+      {% if p.fonte == 'Telegram' and p.arquivo and p.arquivo.endswith('.jpg') and p.formato in ('feed','story') %}
+      <form method="post" action="/posts/{{ p.id }}/animar-ia" style="margin-top:6px"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="sec" type="submit" onclick="return confirm('Gerar vídeo por IA no Higgsfield? Gasta créditos da sua conta.')">🎬 Vídeo por IA</button></form>{% endif %}
       <div class="acts">
         {% for a, rot, cls in [('aprovar','Postar agora',''),('refazer','Refazer','sec'),('descartar','Descartar','bad')] %}
         <form method="post" action="/posts/{{ p.id }}/{{ a }}"><input type="hidden" name="csrf" value="{{ csrf }}">

@@ -817,7 +817,7 @@ def test_video_story_ganha_texto_na_tela(logado, fake):
 
 def test_pedidos_em_texto_livre():
     f = pipeline._pedidos
-    base = {"animar": False, "musica": False, "texto": False, "cortar": False, "legendar": False, "narrar": False}
+    base = {"animar": False, "musica": False, "texto": False, "cortar": False, "legendar": False, "narrar": False, "ia": False}
     assert f("quero um story, gere uma legenda uma animação com musica serio tom de CEO") == {**base, "animar": True, "musica": True, "texto": True}
     assert f("story sem música") == base
     assert f("feed: treino de hoje") == base
@@ -987,7 +987,7 @@ def test_higgsfield_recusado_cai_no_unsplash_ou_explica(logado, fake):
     _chaves(logado, higgs="ID:SEG")
     fake.set(agente=[ideia], higgs_modo="nsfw")
     _dizer(fake, "meme sobre prazo de novo")
-    esperar(lambda: any(m == "sendMessage" and "não gerou a imagem" in d["text"] for m, d in fake.st()["tg"]))
+    esperar(lambda: any(m == "sendMessage" and "não gerou o resultado" in d["text"] for m, d in fake.st()["tg"]))
     # chave recusada (401)
     _chaves(logado, higgs="ID:RUIM")
     fake.set(agente=[ideia], higgs_modo="ok")
@@ -1248,4 +1248,73 @@ def test_narracao_sem_voz_ou_com_voz_fora_do_ar_avisa_e_entrega_o_post(logado, f
     fake.push_msg(42, "video", "reel com narração", arquivo="video.mp4")
     p = _novo_post(n)
     esperar(lambda: any(m == "sendVideo" and "vale só para foto" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+# ---------------- Lote 4: vídeo por IA (Higgsfield) a partir da sua foto ----------------
+def test_foto_com_pedido_de_video_ia_vira_reel_por_ia(logado, fake):
+    _chaves(logado, higgs="IDV:SEGV")
+    db.set_setting("public_base_url", PUBLIC_URL)
+    n = _n_midia()
+    fake.push_msg(42, "foto", "feed: vídeo com IA, clima cinematográfico, treino de hoje")
+    p = _novo_post(n)
+    assert p["formato"] == "reel" and p["arquivo"].endswith(".mp4") and p["legenda"], "feed + vídeo por IA vira Reel com legenda"
+    info = _probe(C.CARDS / p["arquivo"])
+    assert (info["w"], info["h"]) == (1080, 1920)
+    b = fake.st()["banco"]
+    v = next(x for x in b if x[0] == "higgs-video")
+    assert v[1] == "Key IDV:SEGV" and v[2]["image_ok"], "o Higgsfield conseguiu baixar a foto pela URL pública"
+    assert v[2]["duration"] == 5 and v[2]["resolution"] == "720p" and v[2]["image_url"].startswith(PUBLIC_URL + "/")
+    assert "cinematográfico" in fake.st()["llm_users"][0], "o pedido de clima vai para o modelo que escreve o prompt de movimento"
+    assert "Subtle" in v[2]["prompt"] or v[2]["prompt"], "prompt enviado"
+    esperar(lambda: any(m == "sendVideo" and "vídeo por IA" in d["caption"] for m, d in fake.st()["tg"]))
+    assert not list(C.PUBLIC.glob("*.jpg")), "a foto só fica pública durante a geração"
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_botao_video_ia_cria_versao_em_video_do_story(logado, fake):
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story")
+    p = _novo_post(n)
+    assert p["formato"] == "story" and p["arquivo"].endswith(".jpg")
+    esperar(lambda: any(m == "sendPhoto" and "ia:" in _botoes(d) and "Vídeo por IA" in _botoes(d) for m, d in fake.st()["tg"]))
+    antes = len(db.q("SELECT 1 FROM posts"))
+    fake.push(f"ia:{p['id']}", "42")
+    esperar(lambda: len(db.q("SELECT 1 FROM posts")) == antes + 1)
+    v = db.one("SELECT * FROM posts ORDER BY id DESC")
+    assert v["formato"] == "story" and v["arquivo"].endswith(".mp4") and v["legenda"] == "" and v["estado"] == "aguardando_aprovacao"
+    assert pipeline.post(p["id"])["estado"] == "aguardando_aprovacao", "o original continua"
+    esperar(lambda: any(m == "sendMessage" and "Gerando o vídeo por IA" in d["text"] for m, d in fake.st()["tg"]))
+    esperar(lambda: any(m == "sendVideo" and "Vídeo por IA do post" in d["caption"] for m, d in fake.st()["tg"]))
+    for x in (p, v):
+        post_form(logado, f"/posts/{x['id']}/descartar")
+
+
+def test_video_ia_sem_creditos_ou_sem_url_publica_avisa_e_segue_com_a_foto(logado, fake):
+    fake.set(higgs_video_modo="402")
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story vídeo com IA")
+    p = _novo_post(n)
+    assert p["arquivo"].endswith(".jpg") and p["estado"] == "aguardando_aprovacao"
+    esperar(lambda: any(m == "sendPhoto" and "sem créditos no Higgsfield" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    # sem URL pública, o Higgsfield não teria como buscar a foto
+    fake.set(higgs_video_modo="ok")
+    db.set_setting("public_base_url", "")
+    chamadas = sum(1 for x in fake.st()["banco"] if x[0] == "higgs-video")
+    try:
+        n = _n_midia()
+        fake.push_msg(42, "foto", "story vídeo com IA")
+        p = _novo_post(n)
+        esperar(lambda: any(m == "sendPhoto" and "URL pública não configurada" in d["caption"] for m, d in fake.st()["tg"]))
+        assert sum(1 for x in fake.st()["banco"] if x[0] == "higgs-video") == chamadas
+        post_form(logado, f"/posts/{p['id']}/descartar")
+    finally:
+        db.set_setting("public_base_url", PUBLIC_URL)
+    # sem chave: avisa em vez de calar, e o botão 🎬 nem aparece
+    _chaves(logado)
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story vídeo com IA")
+    p = _novo_post(n)
+    esperar(lambda: any(m == "sendPhoto" and "Higgsfield não configurado" in d["caption"] and "ia:" not in _botoes(d) for m, d in fake.st()["tg"]))
     post_form(logado, f"/posts/{p['id']}/descartar")

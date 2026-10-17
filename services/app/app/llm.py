@@ -549,3 +549,21 @@ async def roteiro_narracao(con: dict, contexto: str, pedido: str, temperature: f
         except ValueError as e:
             ultimo = str(e)
     raise ValueError(f"o modelo não entregou um roteiro válido ({ultimo})")
+
+
+async def prompt_movimento(con: dict, pedido: str) -> str:
+    """Prompt EM INGLÊS para o modelo de vídeo animar uma foto: só movimento sutil e realista, sem mudar quem aparece."""
+    system = ("Você escreve prompts em inglês para um modelo de imagem-para-vídeo que anima UMA foto. Descreva só o movimento: câmera (push-in suave, pan lento, parallax) "
+              "e movimentos naturais do que já está na foto (cabelo, tecido, luz, respiração). Não invente pessoas, objetos nem texto na cena; mantenha o rosto e a identidade. "
+              "Até 60 palavras, uma frase só, vertical 9:16, estilo realista. Siga o pedido do autor sobre clima/tom. "
+              'Responda SOMENTE com JSON: {"texto": "..."}')
+    ultimo = ""
+    for _ in range(3):
+        try:
+            t = str(parse(await _chat(con, system, f"Pedido do autor: {pedido}{_feedback(ultimo)}", 0.7, SCHEMA_ROTEIRO)).get("texto") or "").strip()
+            if 5 <= len(t.split()) <= 90:
+                return t
+            ultimo = "prompt vazio ou fora do tamanho"
+        except ValueError as e:
+            ultimo = str(e)
+    raise ValueError(f"o modelo não entregou um prompt válido ({ultimo})")

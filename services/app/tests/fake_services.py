@@ -20,7 +20,7 @@ def make(port: int) -> FastAPI:
 
     @app.post("/_reset")
     def _reset(request: Request):
-        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok", voz=[], whisper_modo="ok", voz_modo="ok")
+        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok", higgs_video_modo="ok", voz=[], whisper_modo="ok", voz_modo="ok")
         return {}
 
     @app.post("/_set")
@@ -266,9 +266,30 @@ def make(port: int) -> FastAPI:
         rid = f"req{len(st['banco'])}"
         return {"status": "queued", "request_id": rid, "status_url": f"http://127.0.0.1:{port}/higgs/requests/{rid}/status"}
 
+    @app.post("/higgs/kling-video/v3.0-turbo/image-to-video")
+    async def higgs_video(request: Request):
+        b = await request.json()
+        async with httpx.AsyncClient() as c:  # o Higgsfield precisa conseguir BUSCAR a foto pela URL pública
+            r = await c.get(b["image_url"])
+        ok = r.status_code == 200 and r.content[:2] == b"\xff\xd8"
+        st["banco"].append(["higgs-video", request.headers.get("authorization", ""), {"prompt": b.get("prompt"), "image_ok": ok, "duration": b.get("duration"),
+                                                                                       "resolution": b.get("resolution"), "image_url": b.get("image_url")}])
+        if st.get("higgs_video_modo") == "402":
+            return JSONResponse({"detail": "no credits"}, status_code=402)
+        rid = f"vid{len(st['banco'])}"
+        return {"status": "queued", "request_id": rid, "status_url": f"http://127.0.0.1:{port}/higgs/requests/{rid}/status"}
+
+    @app.get("/img/clip.mp4")
+    def img_clip():
+        return Response((Path(os.environ["FAKE_MEDIA_DIR"]) / "mudo.mp4").read_bytes(), media_type="video/mp4")
+
     @app.get("/higgs/requests/{rid}/status")
     def higgs_status(rid: str, request: Request):
         st["banco"].append(["higgs-status", request.headers.get("authorization", ""), {}])
+        if rid.startswith("vid"):
+            if sum(1 for x in st["banco"] if x[0] == "higgs-status") < 2:
+                return {"status": "in_progress", "request_id": rid}
+            return {"status": "completed", "request_id": rid, "video": {"url": f"http://127.0.0.1:{port}/img/clip.mp4"}}
         if st.get("higgs_modo") == "nsfw":
             return {"status": "nsfw", "request_id": rid}
         if sum(1 for x in st["banco"] if x[0] == "higgs-status") < 2:

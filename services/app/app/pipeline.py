@@ -239,6 +239,8 @@ async def acao_telegram(acao: str, post_id: int, chat_id: str) -> None:
         await refazer(post_id)
     elif acao == "ds":
         await descartar(post_id, "telegram")
+    elif acao == "ia":  # versão em vídeo por IA (demora minutos: roda em segundo plano)
+        asyncio.create_task(animar_post(post_id))
     elif acao == "ad":  # copia o post para o outro formato (feed <-> story)
         destino = "story" if po["formato"] == "feed" else "feed"
         try:
@@ -356,7 +358,7 @@ AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
          "• Vídeo: “corta os silêncios”, “legenda animada” (precisa de Transcrição em Conexões). Foto: “narra: …” ou só “com narração” (precisa de Voz em Conexões)\n"
          "• Marca: “meu fundo é azul escuro #0b1f3a e o destaque é amarelo”; logotipo: envie o arquivo com a legenda “logo”\n"
          "• Citação: “faz uma citação sobre X” (com “foto de fundo” usa banco de imagens); meme: “meme sobre X”, ou envie sua foto com a legenda “meme: …”\n"
-         "• Botão 📐 em cada card copia o post para Story/Feed sem cortar a imagem\n"
+         "• Botão 📐 em cada card copia o post para Story/Feed sem cortar a imagem; 🎬 transforma a sua foto em vídeo por IA (Higgsfield, gasta créditos). Na legenda da foto: “vídeo com IA”\n"
          "• /novo zera a conversa")
 
 
@@ -401,7 +403,72 @@ def _pedidos(texto: str) -> dict:
             "texto": bool(re.search(r"(?i)\b(legenda|texto|frase|escrev\w+)\b", t2)),
             "cortar": bool(re.search(r"(?i)\b(sil[eê]ncios?|pausas?)\b", t2)),
             "legendar": legendar,
-            "narrar": bool(re.search(r"(?i)\b(narr\w+|locu[cç]\w+|voz\s+em\s+off)\b", t2))}
+            "narrar": bool(re.search(r"(?i)\b(narr\w+|locu[cç]\w+|voz\s+em\s+off)\b", t2)),
+            "ia": bool(re.search(r"(?i)\bhiggs\w*|\b(anim\w+|v[ií]deo|movimento)\s+(com|por|via|de)\s+(ia|intelig[eê]ncia\s+artificial)\b", t2))}
+
+
+_IA_EM_CURSO: set[int] = set()
+
+
+async def _video_ia(p: dict, imagem, pedido: str) -> Path:
+    """Foto -> vídeo de ~5 s pelo Higgsfield (gasta créditos). A foto fica pública só durante a geração. Devolve o MP4 em data/tmp."""
+    base = settings.base_url()
+    if not base:
+        raise banco.BancoError("URL pública não configurada (Conexões): o Higgsfield precisa buscar a foto por ela")
+    con = conexao_do_perfil(p)
+    if con and con["modelo"]:
+        try:
+            prompt = await llm.prompt_movimento(con, pedido or "movimento sutil e cinematográfico")
+        except ValueError:
+            prompt = "Slow cinematic push-in, subtle natural motion, realistic, vertical 9:16"
+    else:
+        prompt = "Slow cinematic push-in, subtle natural motion, realistic, vertical 9:16"
+    nome = f"{uuid_hex()}.jpg"
+    publico = await midia.preparar_publico(Path(imagem), nome)
+    destino = C.DATA / "tmp" / f"{uuid_hex()}.mp4"
+    try:
+        await banco.animar_foto(f"{base}/{nome}", prompt, destino)
+    finally:
+        publico.unlink(missing_ok=True)
+    return destino
+
+
+async def animar_post(post_id: int) -> int | None:
+    """Botão 🎬: cria uma versão em vídeo (por IA) de um post de foto sua. Feed vira Reel; Story continua Story."""
+    po = post(post_id)
+    if not po or po["fonte"] != "Telegram" or not (po["arquivo"] or "").endswith(".jpg") or po["formato"] not in ("feed", "story"):
+        return None
+    if post_id in _IA_EM_CURSO or not (C.CARDS / po["arquivo"]).exists():
+        return None
+    p = perfil(po["perfil_id"])
+    _IA_EM_CURSO.add(post_id)
+    video = None
+    try:
+        if p["telegram_chat_id"] and telegram.ativo():
+            await telegram.avisar(p["telegram_chat_id"], f"🎬 Gerando o vídeo por IA do post #{post_id}. Pode levar alguns minutos e gasta créditos do Higgsfield.")
+        video = await _video_ia(p, C.CARDS / po["arquivo"], po["texto"] or po["noticia_titulo"] or "")
+        formato = "story" if po["formato"] == "story" else "reel"
+        arquivo = await midia.video(video, formato)
+    except Exception as e:
+        db.log(p["id"], post_id, "video_ia_falhou", str(e))
+        if p["telegram_chat_id"] and telegram.ativo():
+            await telegram.avisar(p["telegram_chat_id"], f"Não consegui gerar o vídeo por IA: {str(e)[:200]}")
+        return None
+    finally:
+        _IA_EM_CURSO.discard(post_id)
+        if video:
+            video.unlink(missing_ok=True)
+    legenda = "" if formato == "story" else po["legenda"]
+    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,mencoes,criado_em,atualizado_em)"
+               " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+               (po["perfil_id"], "aguardando_aprovacao", po["noticia_titulo"], "Telegram", po["texto"], po["reacao"], legenda, arquivo, formato,
+                po["mencoes"], db.now(), db.now()))
+    db.log(po["perfil_id"], pid, "video_ia", f"#{post_id} -> {formato}")
+    if p["telegram_chat_id"] and telegram.ativo():
+        mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / arquivo, pid, legenda or "(Story sem legenda)",
+                                         f"🎬 Vídeo por IA do post #{post_id}")
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+    return pid
 
 
 def _roteiro_literal(texto: str) -> str:
@@ -422,7 +489,7 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
     palavras: list[dict] = []
     animado = tipo == "foto" and formato == "story" and (ped["animar"] or ped["musica"])
     quer_musica = not sem_musica and ((tipo == "video" and (p["musica_modo"] == "aleatoria" or ped["musica"]))
-                                      or (tipo == "foto" and (animado or ped["narrar"]) and (ped["musica"] or p["musica_modo"] == "aleatoria")))
+                                      or (tipo == "foto" and (animado or ped["narrar"] or ped["ia"]) and (ped["musica"] or p["musica_modo"] == "aleatoria")))
     musica = None
     if quer_musica:
         musica = midia.escolher_musica()
@@ -430,7 +497,19 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
             avisos.append("ℹ️ Pediu música, mas não há músicas cadastradas (menu Músicas do painel).")
     mencoes = list(dict.fromkeys(m.rstrip(".") for m in re.findall(r"@[A-Za-z0-9_.]{2,30}", texto or "")))
     texto_tela, overlay, audio_fala, dur_fala = "", None, None, 7.0
+    fonte_ia = None
     try:
+        # --- vídeo por IA (Higgsfield): a foto vira um clipe curto; daqui em diante segue como vídeo ---
+        if ped["ia"] and tipo == "foto":
+            try:
+                fonte_ia = await _video_ia(p, src, descricao or texto)
+                tmp.append(fonte_ia)
+                tipo, animado = "video", False
+                formato = "story" if formato == "story" else "reel"
+                extras.append("vídeo por IA")
+            except Exception as e:
+                db.log(p["id"], None, "video_ia_falhou", str(e))
+                avisos.append(f"⚠️ Vídeo por IA falhou ({str(e)[:150]}); segui com a foto.")
         # --- narração (foto): roteiro -> voz -> áudio final; a foto vira vídeo vertical ---
         if ped["narrar"]:
             if tipo == "video":
@@ -458,17 +537,17 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
                     db.log(p["id"], None, "narracao_falhou", str(e))
                     avisos.append(f"⚠️ Não consegui narrar: {str(e)[:150]}")
         # --- vídeo: corte de silêncio e transcrição (antes do ajuste de formato) ---
-        fonte = src
+        fonte = fonte_ia or src
         if tipo == "video" and ped["cortar"]:
             try:
-                fonte, removido = await midia.cortar_silencio(src)
+                fonte, removido = await midia.cortar_silencio(fonte)
                 if removido:
                     tmp.append(fonte)
                     extras.append(f"silêncio cortado (−{removido:.1f} s)")
                 else:
                     avisos.append("ℹ️ Não encontrei pausas longas para cortar.")
             except midia.MidiaError as e:
-                fonte = src
+                fonte = fonte_ia or src
                 avisos.append(f"⚠️ Não consegui cortar o silêncio: {str(e)[:150]}")
         if tipo == "video" and ped["legendar"]:
             if not voz.whisper_ok():

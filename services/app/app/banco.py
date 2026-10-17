@@ -32,20 +32,55 @@ async def _higgs(c: httpx.AsyncClient, consulta: str) -> dict:
         raise BancoError("o Higgsfield recusou a chave (confira ID e segredo em Conexões)")
     r.raise_for_status()
     d = r.json()
-    status_url = d.get("status_url") or f"{C.HIGGS_API_BASE}/requests/{d.get('request_id')}/status"
-    fim = time.time() + MAX_ESPERA_S
+    st = await _higgs_esperar(c, aut, d, MAX_ESPERA_S)
+    imgs = st.get("images") or []
+    if imgs and imgs[0].get("url"):
+        return {"fonte": "Higgsfield", "autor": "", "link": "", "url": imgs[0]["url"], "ia": True}
+    raise BancoError("o Higgsfield concluiu sem devolver imagem")
+
+
+async def _higgs_esperar(c: httpx.AsyncClient, aut: dict, enviado: dict, espera: float) -> dict:
+    """Consulta o status de um pedido do Higgsfield até terminar. Devolve o último status (completed) ou levanta BancoError."""
+    status_url = enviado.get("status_url") or f"{C.HIGGS_API_BASE}/requests/{enviado.get('request_id')}/status"
+    fim = time.time() + espera
     while time.time() < fim:
         s = (await c.get(status_url, headers=aut)).json()
         st = s.get("status")
         if st == "completed":
-            imgs = s.get("images") or []
-            if imgs and imgs[0].get("url"):
-                return {"fonte": "Higgsfield", "autor": "", "link": "", "url": imgs[0]["url"], "ia": True}
-            raise BancoError("o Higgsfield concluiu sem devolver imagem")
+            return s
         if st in ("failed", "nsfw", "canceled"):
-            raise BancoError(f"o Higgsfield não gerou a imagem (status: {st})")
+            raise BancoError(f"o Higgsfield não gerou o resultado (status: {st})")
         await asyncio.sleep(C.HIGGS_POLL_SECONDS)
-    raise BancoError("o Higgsfield demorou demais para gerar a imagem")
+    raise BancoError("o Higgsfield demorou demais para gerar")
+
+
+async def animar_foto(imagem_url: str, prompt: str, destino: Path, duracao: int = 5) -> None:
+    """Foto -> vídeo curto por IA (Kling 3.0 Turbo, image-to-video, pela API do Higgsfield). A imagem precisa estar numa URL pública.
+    Grava o MP4 em destino. Gasta créditos da conta Higgsfield."""
+    if not higgs_chave():
+        raise BancoError("Higgsfield não configurado (Conexões)")
+    aut = {"Authorization": f"Key {higgs_chave()}"}
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+        try:
+            r = await c.post(f"{C.HIGGS_API_BASE}/{C.HIGGS_VIDEO_MODEL}", headers={**aut, "Idempotency-Key": uuid.uuid4().hex},
+                             json={"prompt": prompt[:2400], "image_url": imagem_url, "duration": max(3, min(int(duracao), 15)), "resolution": "720p"})
+            if r.status_code in (401, 403):
+                raise BancoError("o Higgsfield recusou a chave (confira ID e segredo em Conexões)")
+            if r.status_code == 402:
+                raise BancoError("sem créditos no Higgsfield")
+            r.raise_for_status()
+            st = await _higgs_esperar(c, aut, r.json(), C.HIGGS_VIDEO_ESPERA_S)
+            url = (st.get("video") or {}).get("url")
+            if not url:
+                raise BancoError("o Higgsfield concluiu sem devolver vídeo")
+            v = await c.get(url)
+            v.raise_for_status()
+        except httpx.HTTPError as e:
+            raise BancoError(f"falha ao falar com o Higgsfield ({type(e).__name__})")
+    if v.content[4:8] != b"ftyp":
+        raise BancoError("o Higgsfield devolveu um arquivo que não é vídeo MP4")
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    destino.write_bytes(v.content)
 
 
 async def _unsplash(c: httpx.AsyncClient, consulta: str, orientacao: str) -> list[dict]:

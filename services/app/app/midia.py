@@ -252,3 +252,11 @@ async def misturar_voz(voz: Path, musica: Path | None, extra_fim: float = 1.0) -
     args += ["-t", f"{dur:.2f}", "-c:a", "aac", "-b:a", "160k", str(dest)]
     await _run(*args)
     return dest, dur
+
+
+async def preparar_publico(src: Path, nome: str) -> Path:
+    """Cópia JPEG (até 1080 de largura) da imagem em PUBLIC, para o Higgsfield buscar pela URL pública. Quem chama apaga depois."""
+    C.PUBLIC.mkdir(parents=True, exist_ok=True)
+    dest = C.PUBLIC / nome
+    await _run("ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf", "scale='min(1080,iw)':-2", "-frames:v", "1", "-q:v", "3", str(dest))
+    return dest
