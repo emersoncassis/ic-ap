@@ -91,4 +91,6 @@ def esperar(cond, tempo=40):
         if v:
             return v
         time.sleep(0.2)
-    raise AssertionError("tempo esgotado esperando a condição")
+    from app import db as _db
+    ev = [dict(r) for r in _db.q("SELECT tipo, detalhe FROM eventos ORDER BY id DESC LIMIT 6")]
+    raise AssertionError(f"tempo esgotado esperando a condição (últimos eventos: {ev})")

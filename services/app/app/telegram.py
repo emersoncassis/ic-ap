@@ -40,6 +40,14 @@ def _quando(utc: str) -> str:
     return datetime.strptime(utc, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).astimezone(ZoneInfo(settings.tz())).strftime("%d/%m %H:%M")
 
 
+async def enviar_foto(chat_id: str, arquivo, legenda: str = "") -> None:
+    try:
+        with open(arquivo, "rb") as f:
+            await _call("sendPhoto", data={"chat_id": chat_id, "caption": legenda[:1024]}, files={"photo": f})
+    except Exception:
+        pass
+
+
 def _TECLADO(post_id: int, imagem: bool = False) -> dict:
     linhas = [[{"text": "✅ Postar", "callback_data": f"ap:{post_id}"},
                {"text": "🕒 Agendar", "callback_data": f"ag:{post_id}"}],

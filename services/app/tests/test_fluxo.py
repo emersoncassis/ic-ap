@@ -1,3 +1,4 @@
+from pathlib import Path
 import re
 import stat
 import struct
@@ -1438,6 +1439,60 @@ def test_esteira_modelo_sem_visao_avisa_e_entrega_o_card(logado, fake):
     p = _novo_post(n)
     assert p["legenda"] == "" and p["arquivo"].endswith(".jpg")
     esperar(lambda: any(m == "sendPhoto" and "Não consegui analisar a foto" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+
+def _video_longo(nome="longo.mp4", seg=36):
+    import os, subprocess
+    alvo = Path(os.environ["FAKE_MEDIA_DIR"]) / nome
+    if not alvo.exists():
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"testsrc=size=640x360:rate=25:duration={seg}",
+                        "-f", "lavfi", "-i", f"sine=frequency=300:duration={seg}", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                        "-shortest", str(alvo)], check=True)
+
+
+def test_esteira_video_longo_gera_reel_e_story_com_thumb_legenda_e_cover_url(logado, fake):
+    configurar_perfil(logado, esteira="reel")
+    _voz_cfg(logado, tts=False)
+    _video_longo()
+    n = _n_midia()
+    fake.push_msg(42, "video", "", arquivo="longo.mp4")
+    esperar(lambda: len(db.q("SELECT 1 FROM posts WHERE fonte='Telegram'")) >= n + 2, tempo=150)
+    reel, story = (db.one("SELECT * FROM posts WHERE fonte='Telegram' AND formato=? ORDER BY id DESC", (f,)) for f in ("reel", "story"))
+    assert reel and story and reel["estado"] == story["estado"] == "aguardando_aprovacao"
+    ev = [dict(r) for r in db.q("SELECT tipo, detalhe FROM eventos ORDER BY id DESC LIMIT 5")]
+    assert reel["legenda"].startswith("Infraestrutura boa") and story["legenda"] == "", ev
+    assert reel["reacao"] == "Infra boa não aparece. Funciona." and reel["capa"].endswith(".jpg")
+    assert jpeg_dims(C.CARDS / reel["capa"]) == (1080, 1920) and not story["capa"]
+    ir, is_ = _probe(C.CARDS / reel["arquivo"]), _probe(C.CARDS / story["arquivo"])
+    assert (ir["w"], ir["h"]) == (1080, 1920) and 34 < ir["dur"] < 38 and ir["audio"] and 34 < is_["dur"] < 38
+    assert any(x[0] == "whisper" for x in fake.st()["voz"]), "transcreveu a fala"
+    assert fake.st()["imagens"] >= 1 and "transcrição da fala" in fake.st()["llm_users"][-1]
+    esperar(lambda: any(m == "sendPhoto" and "Thumb do Reel" in d["caption"] for m, d in fake.st()["tg"]))
+    esperar(lambda: any(m == "sendVideo" and "[REEL · legendas animadas · com thumb]" in d["caption"] for m, d in fake.st()["tg"]))
+    assert reel["agendado_para"] and story["agendado_para"] and reel["agendado_para"] != story["agendado_para"]
+    post_form(logado, f"/posts/{reel['id']}/aprovar")
+    esperar(lambda: pipeline.post(reel["id"])["estado"] == "publicado")
+    media = next(d for t, d in fake.st()["graph"] if t == "media" and d.get("media_type") == "REELS")
+    assert media["cover_url"].endswith(reel["capa"]) and media["caption"] == reel["legenda"]
+    assert not (C.PUBLIC / reel["capa"]).exists(), "a thumb só fica pública durante o publish"
+    post_form(logado, f"/posts/{story['id']}/descartar")
+
+
+def test_esteira_video_curto_ou_com_palavra_de_formato_gera_um_post_so(logado, fake):
+    configurar_perfil(logado, esteira="reel")
+    n = _n_midia()
+    fake.push_msg(42, "video", "", arquivo="video.mp4")  # curto
+    p = _novo_post(n)
+    import time; time.sleep(1)
+    assert len(db.q("SELECT 1 FROM posts WHERE fonte='Telegram'")) == n + 1 and not p["capa"]
+    post_form(logado, f"/posts/{p['id']}/descartar")
+    n = _n_midia()
+    fake.push_msg(42, "video", "story: bastidor", arquivo="longo.mp4")  # longo, mas o autor pediu só story
+    p = esperar(lambda: (lambda r: r[0] if len(r) > n else None)(db.q("SELECT * FROM posts WHERE fonte='Telegram' ORDER BY id DESC")), tempo=150)
+    time.sleep(1)
+    assert len(db.q("SELECT 1 FROM posts WHERE fonte='Telegram'")) == n + 1 and p["formato"] == "story"
     post_form(logado, f"/posts/{p['id']}/descartar")
 
 

@@ -67,7 +67,7 @@ def arquivos_do_post(po: dict) -> list[str]:
 
 
 def _apagar_post(po: dict) -> None:
-    _apagar(*arquivos_do_post(po))
+    _apagar(*arquivos_do_post(po), po.get("capa"))
 
 
 async def gerar(perfil_id: int, n: int = 1, origem: str = "manual") -> int:
@@ -192,12 +192,18 @@ async def aprovar(post_id: int, origem: str = "painel") -> bool:
         for a in arqs:
             shutil.copyfile(C.CARDS / a, C.PUBLIC / a)
             pubs.append(C.PUBLIC / a)
+        capa = po.get("capa") or ""
+        if capa and (C.CARDS / capa).exists() and po["formato"] == "reel":
+            shutil.copyfile(C.CARDS / capa, C.PUBLIC / capa)  # thumb do Reel (cover_url)
+            pubs.append(C.PUBLIC / capa)
+        else:
+            capa = ""
         token = crypto.dec(p["ig_token_enc"])
         if po["formato"] == "carrossel":
             media = await ig.publicar_carrossel(p["ig_user_id"], token, [f"{base}/{a}" for a in arqs], po["legenda"])
         else:
             media = await ig.publicar(p["ig_user_id"], token, f"{base}/{arqs[0]}", po["legenda"], po["formato"],
-                                      [m for m in (po["mencoes"] or "").split(",") if m])
+                                      [m for m in (po["mencoes"] or "").split(",") if m], f"{base}/{capa}" if capa else "")
         _set(post_id, "publicado", media_id=media, erro=None, agendado_para=None)
         db.log(p["id"], post_id, "publicado", f"{origem} media={media}")
         resultado = "✅ Publicado."
@@ -418,6 +424,7 @@ AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
          "• Ideias de posts: /ideias, ou peça um tema\n"
          "• Gerar: “faz um carrossel de 6 slides sobre X”, “um story sobre Y”, “2 versões para testar”\n"
          "• Foto: é só mandar (pode ser um monte de uma vez). Eu olho a imagem, escrevo a legenda e uma frase sobre a foto, ponho trilha e sugiro o horário; você só dá OK. Escrever “feed”, “story” ou “reel” na legenda troca o formato\n"
+         "• Vídeo com mais de 30 s: eu entrego um Reel e um Story, os dois legendados, com thumb e legenda do Instagram prontas (escrever story/reel/feed na legenda faz só um)\n"
          "• Foto ou vídeo: escreva o pedido na legenda. Ex.: “story animado com música e um texto sério, tom de CEO”, “reel sem música”, “feed: treino de hoje”\n"
          "• Vídeo: “corta os silêncios”, “legenda animada” (precisa de Transcrição em Conexões). Foto: “narra: …” ou só “com narração” (precisa de Voz em Conexões)\n"
          "• Marca: “meu fundo é azul escuro #0b1f3a e o destaque é amarelo”; logotipo: envie o arquivo com a legenda “logo”\n"
@@ -771,6 +778,105 @@ async def _enviar_resumo(p: dict, chat: str) -> None:
                                  [[(f"🕒 Agendar os {len(prontos)} nos horários sugeridos", "at:0")]])
 
 
+LIMITE_VIDEO_LONGO_S = 30
+
+
+async def criar_video_longo(p: dict, src, texto: str) -> list[int]:
+    """Vídeo com mais de 30 s: gera DOIS posts prontos, um Reel (completo, até 90 s) e um Story (até 60 s), os dois com legendas animadas
+    (se houver Transcrição), mais a thumb do Reel com um título que faz sentido com o vídeo, e a legenda do Instagram escrita a partir da fala."""
+    ped = _pedidos(texto)
+    _, descricao, sem_musica = _destino("video", texto)
+    con = conexao_do_perfil(p)
+    avisos: list[str] = []
+    info = await midia.sondar(src)
+    dur = info["duracao"]
+    palavras: list[dict] = []
+    if not info["audio"]:
+        avisos.append("ℹ️ O vídeo não tem áudio: sem legendas animadas.")
+    elif not voz.whisper_ok():
+        avisos.append("ℹ️ Sem Transcrição configurada (Conexões): sem legendas animadas e a legenda sai só pelo quadro do vídeo.")
+    else:
+        try:
+            palavras = await voz.transcrever(src)
+            if not palavras:
+                avisos.append("ℹ️ Não ouvi fala no vídeo: sem legendas animadas.")
+        except voz.VozError as e:
+            avisos.append(f"⚠️ Transcrição falhou ({str(e)[:120]}): sem legendas animadas.")
+    transcr = " ".join(w["w"] for w in palavras)[:2500]
+    # --- legenda do post e título da thumb, a partir de um quadro + fala ---
+    quadro = await midia.quadro(src, min(dur * 0.3, max(dur - 1, 0)))
+    analise = None
+    capa, musica = "", None
+    try:
+        if not con or not con["modelo"]:
+            avisos.append("⚠️ Nenhum LLM configurado: sem legenda nem título na thumb (menu LLM do painel).")
+        else:
+            try:
+                dica = "; ".join(x for x in (descricao, f"transcrição da fala: {transcr}" if transcr else "") if x)
+                analise = await llm.analisar_foto(con, p["contexto_md"], await midia.miniatura_b64(quadro), dica, capa=True)
+            except Exception as e:
+                db.log(p["id"], None, "analise_video_falhou", str(e))
+                avisos.append(f"⚠️ Não consegui analisar o vídeo: {str(e)[:200]}")
+        if not sem_musica and (p["musica_modo"] == "aleatoria" or ped["musica"]):
+            musica = midia.escolher_musica()
+        acento = marca_mod.carregar(p)["acento"]
+        feitos: dict[str, str] = {}
+        for fmt in ("reel", "story"):
+            if fmt == "story" and dur <= midia.MAX_STORY_S:  # igual ao Reel: só copia (poupa a renderização)
+                nome = f"{uuid_hex()}.mp4"
+                shutil.copyfile(C.CARDS / feitos["reel"], C.CARDS / nome)
+                feitos["story"] = nome
+                continue
+            arq = await midia.video(src, fmt, musica, None)
+            if palavras:
+                try:
+                    com = await midia.legendar(arq, palavras, acento)
+                    _apagar(arq)
+                    arq = com
+                except midia.MidiaError as e:
+                    avisos.append(f"⚠️ Legendas animadas falharam no {fmt}: {str(e)[:120]}")
+            feitos[fmt] = arq
+        # --- thumb 9:16 do Reel: o quadro com o título ---
+        titulo = (analise or {}).get("texto_tela", "")
+        base = await midia.foto(quadro, "story")
+        if titulo:
+            ov = await render.overlay_story(titulo, "", p, None)
+            try:
+                capa = await midia.sobrepor(base, ov)
+            finally:
+                Path(ov).unlink(missing_ok=True)
+        else:
+            capa = base
+    finally:
+        quadro.unlink(missing_ok=True)
+    legenda = (analise or {}).get("legenda_instagram", "")
+    resumo_tema = descricao or (analise or {}).get("descricao", "") or "Vídeo do Telegram"
+    ids: list[int] = []
+    for fmt in ("reel", "story"):
+        pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,capa,criado_em,atualizado_em)"
+                   " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (p["id"], "aguardando_aprovacao", resumo_tema[:120], "Telegram", resumo_tema, titulo, legenda if fmt == "reel" else "",
+                    feitos[fmt], fmt, capa if fmt == "reel" else "", db.now(), db.now()))
+        _sugerir_horario(p, pid)
+        db.log(p["id"], pid, "video_longo", f"{fmt} {dur:.0f}s" + (" legendado" if palavras else "") + (" thumb" if capa else ""))
+        ids.append(pid)
+    if p["telegram_chat_id"]:
+        chat = str(p["telegram_chat_id"])
+        if capa:
+            await telegram.enviar_foto(chat, C.CARDS / capa, f"🖼 Thumb do Reel #{ids[0]}" + (f": “{titulo}”" if titulo else ""))
+        extra = " · legendas animadas" if palavras else ""
+        for pid, fmt in zip(ids, ("reel", "story")):
+            aviso = "\n".join(avisos) + (f"\nℹ️ Story de {min(dur, midia.MAX_STORY_S):.0f} s (máx. 60 s)." if fmt == "story" and dur > midia.MAX_STORY_S else "")
+            if fmt == "reel" and dur > midia.MAX_REEL_S:
+                aviso += f"\nℹ️ O vídeo tem {dur:.0f} s: o Reel foi cortado em {midia.MAX_REEL_S} s."
+            mid = await telegram.enviar_card(chat, C.CARDS / feitos[fmt], pid,
+                                             (legenda if fmt == "reel" else "(Story sem legenda)") + f"\n\n[{fmt.upper()}{extra}" + (" · com thumb" if fmt == "reel" and capa else "") + "]",
+                                             aviso.strip())
+            db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+            _resumo_do_lote(p)
+    return ids
+
+
 async def mensagem_telegram(msg: dict) -> None:
     chat_id = str(msg.get("chat", {}).get("id", ""))
     p = db.one("SELECT * FROM perfis WHERE telegram_chat_id=? AND telegram_chat_id!='' ORDER BY ativo DESC, id LIMIT 1", (chat_id,))
@@ -808,7 +914,13 @@ async def mensagem_telegram(msg: dict) -> None:
             await criar_meme_foto(p, src, texto)
         else:
             async with _MIDIA_SEM:
-                await criar_de_midia(p, tipo, src, texto)
+                longo = (tipo == "video" and p["esteira"] != "off" and not re.search(r"(?i)\b(story|stories|reels?|feed)\b", texto)
+                         and (await midia.sondar(src))["duracao"] > LIMITE_VIDEO_LONGO_S)
+                if longo:
+                    await telegram.avisar(chat_id, "Vídeo com mais de 30 s: gerando Reel + Story + thumb + legenda…")
+                    await criar_video_longo(p, src, texto)
+                else:
+                    await criar_de_midia(p, tipo, src, texto)
     except Exception as e:
         db.log(p["id"], None, "midia_falhou", str(e))
         await telegram.avisar(chat_id, f"Não consegui preparar a mídia: {str(e)[:200]}")

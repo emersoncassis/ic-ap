@@ -506,7 +506,7 @@ SCHEMA_FOTO = {"type": "object", "properties": {"descricao": _STR, "legenda_inst
                "required": ["descricao", "legenda_instagram", "texto_tela"]}
 
 
-async def analisar_foto(con: dict, contexto: str, imagem_b64: str, dica: str = "", temperature: float = 0.8) -> dict:
+async def analisar_foto(con: dict, contexto: str, imagem_b64: str, dica: str = "", temperature: float = 0.8, capa: bool = False) -> dict:
     """Olha a foto do autor (modelo com visão) e devolve {descricao, legenda_instagram, texto_tela}: tudo no tom dele, pronto para o card."""
     system = (f"{contexto.strip()}\n\n---\nVocê recebe uma foto do próprio autor e deixa o post de Instagram pronto, em primeira pessoa e no tom dele. "
               "Olhe a imagem e entenda o contexto: o que aparece, o ambiente, o assunto e a mensagem que ela passa para o público dele. "
@@ -516,9 +516,13 @@ async def analisar_foto(con: dict, contexto: str, imagem_b64: str, dica: str = "
               "'texto_tela': frase curta e marcante para escrever EM CIMA da imagem (máximo 70 caracteres, sem hashtags, sem emoji, sem aspas), "
               "que comenta o que a foto mostra, e não a descreve de forma seca. "
               'Responda SOMENTE com JSON: {"descricao": "...", "legenda_instagram": "...", "texto_tela": "..."}')
+    if capa:  # quadro de um vídeo: o texto da imagem vira o título da thumb
+        system += ("\n\nATENÇÃO: a imagem é um quadro de um VÍDEO do autor e a dica traz a transcrição da fala. Escreva a legenda sobre o assunto do "
+                   "vídeo (use a transcrição), e 'texto_tela' como TÍTULO DA CAPA (thumb): máximo 6 palavras, 45 caracteres, que desperte curiosidade e "
+                   "faça sentido com o assunto do vídeo, sem clickbait enganoso.")
     ultimo = ""
     for _ in range(3):
-        user = "Foto em anexo." + (f" Dica do autor: {dica}" if dica else "") + _feedback(ultimo)
+        user = ("Quadro de um vídeo em anexo." if capa else "Foto em anexo.") + (f" Dica do autor: {dica}" if dica else "") + _feedback(ultimo)
         try:
             d = parse(await _chat(con, system, user, temperature, SCHEMA_FOTO, imagem=imagem_b64))
             desc, leg, tela = (str(d.get(k) or "").strip().strip('"') for k in ("descricao", "legenda_instagram", "texto_tela"))

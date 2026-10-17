@@ -20,7 +20,7 @@ def make(port: int) -> FastAPI:
 
     @app.post("/_reset")
     def _reset(request: Request):
-        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok", higgs_video_modo="ok", voz=[], whisper_modo="ok", voz_modo="ok")
+        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok", higgs_video_modo="ok", voz=[], whisper_modo="ok", voz_modo="ok", foto_modo="ok", imagens=0)
         return {}
 
     @app.post("/_set")

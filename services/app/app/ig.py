@@ -24,13 +24,13 @@ async def _graph(c: httpx.AsyncClient, method: str, path: str, token: str, **par
     return data
 
 
-def _params_midia(url: str, legenda: str, formato: str) -> dict:
+def _params_midia(url: str, legenda: str, formato: str, capa: str = "") -> dict:
     """feed: foto; story: imagem ou vídeo (sem legenda); reel: vídeo."""
     video = url.lower().endswith(".mp4")
     if formato == "story":
         return {"media_type": "STORIES", ("video_url" if video else "image_url"): url}
     if formato == "reel" or video:
-        return {"media_type": "REELS", "video_url": url, "caption": legenda, "share_to_feed": "true"}
+        return {"media_type": "REELS", "video_url": url, "caption": legenda, "share_to_feed": "true", **({"cover_url": capa} if capa else {})}
     return {"image_url": url, "caption": legenda}
 
 
@@ -52,9 +52,10 @@ def _user_tags(mencoes: list[str]) -> dict:
     return {"user_tags": json.dumps([{"username": n, "x": 0.5, "y": 0.78} for n in nomes])} if nomes else {}
 
 
-async def publicar(ig_user_id: str, token: str, media_url: str, legenda: str, formato: str = "feed", mencoes: list[str] | None = None) -> str:
+async def publicar(ig_user_id: str, token: str, media_url: str, legenda: str, formato: str = "feed", mencoes: list[str] | None = None,
+                   capa: str = "") -> str:
     async with httpx.AsyncClient(timeout=60) as c:
-        cont = await _graph(c, "POST", f"{ig_user_id}/media", token, **_params_midia(media_url, legenda, formato), **_user_tags(mencoes or []))
+        cont = await _graph(c, "POST", f"{ig_user_id}/media", token, **_params_midia(media_url, legenda, formato, capa), **_user_tags(mencoes or []))
         await _esperar(c, cont["id"], token, media_url.lower().endswith(".mp4"))
         pub = await _graph(c, "POST", f"{ig_user_id}/media_publish", token, creation_id=cont["id"])
     return pub["id"]

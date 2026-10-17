@@ -51,6 +51,17 @@ async def miniatura_b64(src: Path, lado: int = 1024) -> str:
         out.unlink(missing_ok=True)
 
 
+async def quadro(src: Path, segundo: float) -> Path:
+    """Um quadro do vídeo (JPEG em data/tmp). Quem chama apaga."""
+    tmp = C.DATA / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    out = tmp / f"{uuid.uuid4().hex}.jpg"
+    await _run("ffmpeg", "-y", "-v", "error", "-ss", f"{max(segundo, 0):.2f}", "-i", str(src), "-frames:v", "1", "-q:v", "2", str(out))
+    if not out.exists():
+        raise MidiaError("não consegui tirar um quadro do vídeo")
+    return out
+
+
 async def trilha_padrao() -> Path:
     """Trilha instrumental suave gerada aqui mesmo (sem direitos autorais), usada quando não há músicas na aba Músicas.
     Fica em data/trilha_padrao.m4a e é criada na primeira vez."""
@@ -111,7 +122,7 @@ async def video(src: Path, formato: str, musica: Path | None = None, overlay: st
     limite = MAX_STORY_S if formato == "story" else MAX_REEL_S
     dur = min(info["duracao"] or limite, limite)
     nome = f"{uuid.uuid4().hex}.mp4"
-    fv = ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg];"
+    fv = ("[0:v]split[a][b];[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,scale=1080:1920[bg];"
           "[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[" + ("v0" if overlay else "v") + "]")
     args = ["ffmpeg", "-y", "-v", "error", "-i", str(src)]
     prox = _entrada_overlay(args, overlay)

@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS posts(
   noticia_url TEXT, noticia_titulo TEXT, fonte TEXT, texto TEXT, json_llm TEXT, manchete TEXT, reacao TEXT,
   legenda TEXT, arquivo TEXT, media_id TEXT, erro TEXT, tg_message_id TEXT, criado_em TEXT, atualizado_em TEXT,
   variacao INTEGER NOT NULL DEFAULT 1, grupo INTEGER, agendado_para TEXT, formato TEXT NOT NULL DEFAULT 'feed',
-  angulo TEXT DEFAULT '', arquivos TEXT NOT NULL DEFAULT '', mencoes TEXT NOT NULL DEFAULT '',
+  angulo TEXT DEFAULT '', arquivos TEXT NOT NULL DEFAULT '', mencoes TEXT NOT NULL DEFAULT '', capa TEXT NOT NULL DEFAULT '',
   UNIQUE(perfil_id, noticia_url, variacao));
 CREATE TABLE IF NOT EXISTS eventos(
   id INTEGER PRIMARY KEY, perfil_id INTEGER, post_id INTEGER, tipo TEXT, detalhe TEXT, criado_em TEXT);
@@ -70,7 +70,7 @@ def _migrar() -> None:
         _conn.execute(f"INSERT INTO posts({antigas}) SELECT {antigas} FROM posts_old")
         _conn.execute("DROP TABLE posts_old")
     else:
-        for col in ("arquivos", "mencoes"):
+        for col in ("arquivos", "mencoes", "capa"):
             if col not in _colunas("posts"):
                 _conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
 
