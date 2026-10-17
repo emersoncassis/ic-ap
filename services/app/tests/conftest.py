@@ -75,6 +75,7 @@ def client(fake_server):
 def fake():
     httpx.post(f"{FAKE}/_reset")
     from app import db
+    db.set_setting("whisper_local", "0")  # sem servidor configurado, os testes antigos esperam "sem transcrição"
     db.x("UPDATE perfis SET esteira='off'")  # os testes antigos cobrem o fluxo manual; a esteira tem testes próprios
     class F:
         def st(self): return httpx.get(f"{FAKE}/_st").json()

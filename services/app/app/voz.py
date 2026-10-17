@@ -1,6 +1,6 @@
 """Transcrição (Whisper) e voz (TTS) por servidores compatíveis com a API da OpenAI, rodando FORA do app (faster-whisper-server,
 whisper.cpp server, Kokoro/Piper/OpenAI-edge-tts, LM Studio etc.). O endereço é configurado em Conexões."""
-import re, uuid
+import asyncio, re, threading, uuid
 from pathlib import Path
 
 import httpx
@@ -17,8 +17,21 @@ def _cfg(kind: str) -> dict:
             "voz": db.get_setting("tts_voz").strip() if kind == "tts" else "", "chave": settings.segredo(f"{kind}_key")}
 
 
+def local_ok() -> bool:
+    """Transcrição embutida no próprio app (faster-whisper na CPU): funciona sem subir nenhum servidor. Desligue com a configuração whisper_local=0."""
+    return db.get_setting("whisper_local", "1") != "0"
+
+
+def usa_local() -> bool:
+    return not _cfg("whisper")["url"] and local_ok()
+
+
+def modelo_baixado() -> bool:
+    return any((C.DATA / "modelos" / "whisper").glob("**/model.bin")) if (C.DATA / "modelos" / "whisper").exists() else False
+
+
 def whisper_ok() -> bool:
-    return bool(_cfg("whisper")["url"])
+    return bool(_cfg("whisper")["url"]) or local_ok()
 
 
 def tts_ok() -> bool:
@@ -42,12 +55,54 @@ async def _audio_16k(src: Path) -> Path:
     return dest
 
 
+_LOCAL: dict = {"modelo": None}
+_LOCAL_LOCK = threading.Lock()
+
+
+def _transcrever_local_sync(caminho: str) -> list[dict]:
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise VozError("o faster-whisper não está instalado no app: rode docker compose up -d --build")
+    with _LOCAL_LOCK:
+        try:
+            if _LOCAL["modelo"] is None:
+                nome = db.get_setting("whisper_local_modelo", "small") or "small"
+                _LOCAL["modelo"] = WhisperModel(nome, device="cpu", compute_type="int8",
+                                                download_root=str(C.DATA / "modelos" / "whisper"))
+            segs, _ = _LOCAL["modelo"].transcribe(caminho, language="pt", word_timestamps=True, vad_filter=True, beam_size=1)
+            return [{"w": str(w.word).strip(), "ini": float(w.start), "fim": float(w.end)} for s in segs for w in (s.words or []) if str(w.word).strip()]
+        except VozError:
+            raise
+        except Exception as e:
+            raise VozError(f"a transcrição local falhou ({type(e).__name__}: {str(e)[:150]}). Na primeira vez o app baixa o modelo da internet (~460 MB)")
+
+
+async def _transcrever_local(src: Path) -> list[dict]:
+    audio = await _audio_16k(src)
+    try:
+        return await asyncio.to_thread(_transcrever_local_sync, str(audio))
+    finally:
+        audio.unlink(missing_ok=True)
+
+
 async def transcrever(src: Path) -> list[dict]:
-    """Palavras com tempo: [{'w': 'texto', 'ini': 0.0, 'fim': 0.4}, ...]. Pede timestamps por palavra; se o servidor só der segmentos,
-    distribui as palavras do segmento pelo tempo dele."""
+    """Palavras com tempo: [{'w': 'texto', 'ini': 0.0, 'fim': 0.4}, ...]. Usa o servidor configurado em Conexões; sem servidor (ou com o
+    servidor fora do ar) usa a transcrição embutida no app, na CPU, sem precisar subir nada."""
     c = _cfg("whisper")
     if not c["url"]:
-        raise VozError("transcrição não configurada (Conexões → Transcrição)")
+        if not local_ok():
+            raise VozError("transcrição não configurada (Conexões → Transcrição)")
+        return await _transcrever_local(src)
+    try:
+        return await _transcrever_servidor(src, c)
+    except VozError as e:
+        if local_ok() and str(e).startswith("não consegui falar"):
+            return await _transcrever_local(src)
+        raise
+
+
+async def _transcrever_servidor(src: Path, c: dict) -> list[dict]:
     audio = await _audio_16k(src)
     try:
         dados = {"model": c["modelo"] or "whisper-1", "response_format": "verbose_json", "language": "pt",

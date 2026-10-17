@@ -794,14 +794,16 @@ async def criar_video_longo(p: dict, src, texto: str) -> list[int]:
     if not info["audio"]:
         avisos.append("ℹ️ O vídeo não tem áudio: sem legendas animadas.")
     elif not voz.whisper_ok():
-        avisos.append("ℹ️ Sem Transcrição configurada (Conexões): sem legendas animadas e a legenda sai só pelo quadro do vídeo.")
+        avisos.append("ℹ️ Transcrição desligada: sem legendas animadas e a legenda sai só pelo quadro do vídeo.")
     else:
         try:
+            if voz.usa_local() and not voz.modelo_baixado() and p["telegram_chat_id"]:
+                await telegram.avisar(str(p["telegram_chat_id"]), "Primeira transcrição: baixando o modelo de voz (~460 MB). Só nesta vez; pode demorar alguns minutos.")
             palavras = await voz.transcrever(src)
             if not palavras:
                 avisos.append("ℹ️ Não ouvi fala no vídeo: sem legendas animadas.")
         except voz.VozError as e:
-            avisos.append(f"⚠️ Transcrição falhou ({str(e)[:120]}): sem legendas animadas.")
+            avisos.append(f"⚠️ Transcrição falhou ({str(e)[:200]}): sem legendas animadas.")
     transcr = " ".join(w["w"] for w in palavras)[:2500]
     # --- legenda do post e título da thumb, a partir de um quadro + fala ---
     quadro = await midia.quadro(src, min(dur * 0.3, max(dur - 1, 0)))

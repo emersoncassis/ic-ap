@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from app import config as C, crypto, db, pipeline, scheduler, settings
+from app import config as C, crypto, db, pipeline, scheduler, settings, voz
 from app.tunnel import tunel
 from tests.conftest import FAKE, PUBLIC_URL, esperar
 
@@ -1494,6 +1494,43 @@ def test_esteira_video_curto_ou_com_palavra_de_formato_gera_um_post_so(logado, f
     time.sleep(1)
     assert len(db.q("SELECT 1 FROM posts WHERE fonte='Telegram'")) == n + 1 and p["formato"] == "story"
     post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+
+PALAVRAS_LOCAIS = [{"w": "Hoje", "ini": 0.2, "fim": 0.6}, {"w": "falei", "ini": 0.6, "fim": 1.0}, {"w": "sobre", "ini": 1.0, "fim": 1.4}, {"w": "infraestrutura", "ini": 1.4, "fim": 2.2}]
+
+
+def test_transcricao_embutida_sem_servidor_legenda_o_video_longo(logado, fake, monkeypatch):
+    configurar_perfil(logado, esteira="reel")
+    _voz_cfg(logado, whisper=False, tts=False)
+    db.set_setting("whisper_local", "1")
+    monkeypatch.setattr(voz, "_transcrever_local_sync", lambda caminho: PALAVRAS_LOCAIS)
+    _video_longo()
+    n = _n_midia()
+    fake.push_msg(42, "video", "", arquivo="longo.mp4")
+    esperar(lambda: len(db.q("SELECT 1 FROM posts WHERE fonte='Telegram'")) >= n + 2, tempo=150)
+    assert not any(x[0] == "whisper" for x in fake.st()["voz"]), "nenhum servidor foi chamado"
+    assert "Hoje falei sobre infraestrutura" in fake.st()["llm_users"][-1], "a fala transcrita chegou ao modelo"
+    esperar(lambda: any(m == "sendVideo" and "[REEL · legendas animadas · com thumb]" in d["caption"] for m, d in fake.st()["tg"]))
+    for r in db.q("SELECT id FROM posts WHERE fonte='Telegram' AND estado='aguardando_aprovacao'"):
+        post_form(logado, f"/posts/{r['id']}/descartar")
+
+
+def test_servidor_de_transcricao_fora_do_ar_cai_para_a_embutida(logado, fake, monkeypatch):
+    db.set_setting("whisper_local", "1")
+    db.set_setting("whisper_url", "http://127.0.0.1:9")
+    monkeypatch.setattr(voz, "_transcrever_local_sync", lambda caminho: PALAVRAS_LOCAIS)
+    _video_longo()
+    palavras = _rodar(voz.transcrever(Path(__import__("os").environ["FAKE_MEDIA_DIR"]) / "longo.mp4"))
+    assert [w["w"] for w in palavras] == ["Hoje", "falei", "sobre", "infraestrutura"]
+    db.set_setting("whisper_url", "")
+    db.set_setting("whisper_local", "0")
+    async def tenta():
+        try:
+            await voz.transcrever(Path(__import__("os").environ["FAKE_MEDIA_DIR"]) / "longo.mp4")
+        except voz.VozError as e:
+            return str(e)
+    assert "não configurada" in _rodar(tenta())
 
 
 
