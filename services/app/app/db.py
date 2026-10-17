@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS perfis(
   id INTEGER PRIMARY KEY, nome TEXT NOT NULL, handle TEXT DEFAULT '', ativo INTEGER DEFAULT 1,
   ig_user_id TEXT DEFAULT '', ig_token_enc TEXT DEFAULT '', telegram_chat_id TEXT DEFAULT '',
   llm_conexao_id INTEGER, contexto_md TEXT DEFAULT '',
-  horarios TEXT DEFAULT '09:00,18:00', musica_modo TEXT NOT NULL DEFAULT 'nenhuma', marca TEXT NOT NULL DEFAULT '', palavras_chave TEXT DEFAULT '', max_idade_horas INTEGER DEFAULT 36,
+  horarios TEXT DEFAULT '09:00,18:00', musica_modo TEXT NOT NULL DEFAULT 'nenhuma', marca TEXT NOT NULL DEFAULT '', esteira TEXT NOT NULL DEFAULT 'reel', palavras_chave TEXT DEFAULT '', max_idade_horas INTEGER DEFAULT 36,
   criado_em TEXT);
 CREATE TABLE IF NOT EXISTS feeds(
   id INTEGER PRIMARY KEY, perfil_id INTEGER, nome TEXT, url TEXT, tema TEXT DEFAULT '', ativo INTEGER DEFAULT 1);
@@ -59,6 +59,8 @@ def _migrar() -> None:
     """Bancos criados por versões anteriores: recria posts (nova UNIQUE com variação) e adiciona colunas."""
     if "musica_modo" not in _colunas("perfis"):
         _conn.execute("ALTER TABLE perfis ADD COLUMN musica_modo TEXT NOT NULL DEFAULT 'nenhuma'")
+    if "esteira" not in _colunas("perfis"):
+        _conn.execute("ALTER TABLE perfis ADD COLUMN esteira TEXT NOT NULL DEFAULT 'reel'")
     if "marca" not in _colunas("perfis"):
         _conn.execute("ALTER TABLE perfis ADD COLUMN marca TEXT NOT NULL DEFAULT ''")
     if "variacao" not in _colunas("posts"):

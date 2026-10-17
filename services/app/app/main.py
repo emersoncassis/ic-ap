@@ -631,12 +631,13 @@ async def perfil_salvar(request: Request, pid: int):
     horarios = ",".join(h.strip() for h in f.get("horarios", "").split(",") if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", h.strip()))
     con = int(f["llm_conexao_id"]) if str(f.get("llm_conexao_id", "")).isdigit() else None
     db.x("UPDATE perfis SET nome=?,handle=?,ativo=?,ig_user_id=?,telegram_chat_id=?,llm_conexao_id=?,"
-         "contexto_md=?,horarios=?,palavras_chave=?,max_idade_horas=?,musica_modo=? WHERE id=?",
+         "contexto_md=?,horarios=?,palavras_chave=?,max_idade_horas=?,musica_modo=?,esteira=? WHERE id=?",
          (f.get("nome", "").strip() or "Sem nome", f.get("handle", "").strip(), 1 if f.get("ativo") else 0,
           f.get("ig_user_id", "").strip(), f.get("telegram_chat_id", "").strip(), con,
           f.get("contexto_md", ""), horarios, f.get("palavras_chave", "").strip(),
           max(1, min(int(f.get("max_idade_horas") or 36), 720)),
-          "aleatoria" if f.get("musica_modo") == "aleatoria" else "nenhuma", pid))
+          "aleatoria" if f.get("musica_modo") == "aleatoria" else "nenhuma",
+          f.get("esteira") if f.get("esteira") in ("reel", "feed", "story", "off") else "reel", pid))
     if f.get("ig_token", "").strip():
         db.x("UPDATE perfis SET ig_token_enc=? WHERE id=?", (crypto.enc(f["ig_token"].strip()), pid))
     db.log(pid, None, "perfil_salvo")

@@ -74,15 +74,16 @@ async def slide(titulo: str, texto: str, idx: int, total: int, handle: str, nome
     return name, estourou
 
 
-async def overlay_story(texto: str, handle: str = "", p: dict | None = None, mencoes: list[str] | None = None) -> str:
-    """PNG transparente 1080x1920 com o texto na zona segura do Story (para sobrepor na foto ou no vídeo). Devolve o nome em CARDS-tmp."""
+async def overlay_story(texto: str, handle: str = "", p: dict | None = None, mencoes: list[str] | None = None, altura: int = 1920) -> str:
+    """PNG transparente 1080x1920 (ou 1080x1350 para o feed) com o texto na zona segura (para sobrepor na foto ou no vídeo). Devolve o caminho em data/tmp."""
     env = Environment(loader=FileSystemLoader(str(C.CARD_TEMPLATES)), autoescape=select_autoescape(["html"]))
     tamanho = 78 if len(texto) <= 60 else (66 if len(texto) <= 100 else 56)
-    html = env.get_template("overlay_story.html").render(texto=texto, handle=handle, tamanho=tamanho, mencoes=mencoes or [], **M.contexto(p))
+    html = env.get_template("overlay_story.html").render(texto=texto, handle=handle, tamanho=tamanho, mencoes=mencoes or [], altura=altura,
+                                                          base=370 if altura >= 1920 else 120, **M.contexto(p))
     tmp = C.DATA / "tmp"
     tmp.mkdir(parents=True, exist_ok=True)
     caminho = tmp / f"{uuid.uuid4().hex}.png"
-    page = await _state["browser"].new_page(viewport={"width": 1080, "height": 1920})
+    page = await _state["browser"].new_page(viewport={"width": 1080, "height": altura})
     try:
         await page.set_content(html, wait_until="load")
         await page.screenshot(path=str(caminho), type="png", omit_background=True)

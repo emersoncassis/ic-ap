@@ -37,6 +37,44 @@ def escolher_musica() -> Path | None:
     return random.choice(lista) if lista else None
 
 
+async def miniatura_b64(src: Path, lado: int = 1024) -> str:
+    """Foto reduzida (JPEG, maior lado = `lado`) em base64, para o modelo de visão."""
+    import base64
+    tmp = C.DATA / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    out = tmp / f"{uuid.uuid4().hex}.jpg"
+    try:
+        await _run("ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf", f"scale='min({lado},iw)':'min({lado},ih)':force_original_aspect_ratio=decrease",
+                   "-frames:v", "1", "-q:v", "4", str(out))
+        return base64.b64encode(out.read_bytes()).decode()
+    finally:
+        out.unlink(missing_ok=True)
+
+
+async def trilha_padrao() -> Path:
+    """Trilha instrumental suave gerada aqui mesmo (sem direitos autorais), usada quando não há músicas na aba Músicas.
+    Fica em data/trilha_padrao.m4a e é criada na primeira vez."""
+    alvo = C.DATA / "trilha_padrao.m4a"
+    if alvo.exists() and alvo.stat().st_size > 1000:
+        return alvo
+    # acorde Am9 → Fmaj7 → C → G em pads de senoides, com batida leve de grave; 4 x 8 s = 32 s, em loop
+    acordes = [(110.0, 220.0, 261.63, 329.63, 493.88), (87.31, 174.61, 261.63, 329.63, 440.0),
+               (130.81, 196.0, 261.63, 329.63, 392.0), (98.0, 196.0, 246.94, 293.66, 392.0)]
+    entradas, filtros = [], []
+    for i, ac in enumerate(acordes):
+        expr = "+".join(f"{0.16 / (1 + 0.5 * k):.3f}*sin(2*PI*{f}*t)" for k, f in enumerate(ac))
+        entradas += ["-f", "lavfi", "-t", "8", "-i", f"aevalsrc={expr}:s=44100"]
+        filtros.append(f"[{i}:a]afade=t=in:d=1.5,afade=t=out:st=6.5:d=1.5,lowpass=f=1800,aecho=0.8:0.6:380:0.35[c{i}]")
+    fc = ";".join(filtros) + ";" + "".join(f"[c{i}]" for i in range(4)) + "concat=n=4:v=0:a=1,tremolo=f=0.4:d=0.25,volume=1.2[a]"
+    tmp = alvo.with_suffix(".tmp.m4a")
+    try:
+        await _run("ffmpeg", "-y", "-v", "error", *entradas, "-filter_complex", fc, "-map", "[a]", "-c:a", "aac", "-b:a", "128k", str(tmp))
+        tmp.replace(alvo)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return alvo
+
+
 def nome_seguro(nome: str) -> str:
     base = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(nome).name).strip(" .") or "musica"
     return base[:80]

@@ -14,6 +14,13 @@
       <div><label>Notícias das últimas (horas)</label><input type="number" name="max_idade_horas" value="{{ p.max_idade_horas }}"></div>
       <div><label>Música nos vídeos do Telegram</label><select name="musica_modo"><option value="nenhuma" {{ 'selected' if p.musica_modo!='aleatoria' }}>Sem música</option><option value="aleatoria" {{ 'selected' if p.musica_modo=='aleatoria' }}>Automática (aleatória, da aba Músicas)</option></select></div>
     </div>
+    <label>Foto enviada ao bot (esteira automática)</label>
+    <select name="esteira">
+      <option value="reel" {{ 'selected' if p.esteira=='reel' }}>Reel: foto animada + frase na imagem + trilha + legenda (padrão)</option>
+      <option value="feed" {{ 'selected' if p.esteira=='feed' }}>Feed: foto com frase na imagem + legenda (sem música)</option>
+      <option value="story" {{ 'selected' if p.esteira=='story' }}>Story: foto animada + frase + trilha</option>
+      <option value="off" {{ 'selected' if p.esteira=='off' }}>Desligada (só faz o que eu pedir na legenda)</option>
+    </select>
     <label>Palavras-chave (vazio = aceita tudo)</label><input name="palavras_chave" value="{{ p.palavras_chave }}">
   </div>
   <div class="card"><h2 style="margin-top:0">Instagram e Telegram</h2>

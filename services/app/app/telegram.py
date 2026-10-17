@@ -34,11 +34,20 @@ async def enviar_card(chat_id: str, arquivo, post_id: int, legenda: str, aviso: 
     return str(res["message_id"])
 
 
+def _quando(utc: str) -> str:
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    return datetime.strptime(utc, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).astimezone(ZoneInfo(settings.tz())).strftime("%d/%m %H:%M")
+
+
 def _TECLADO(post_id: int, imagem: bool = False) -> dict:
     linhas = [[{"text": "✅ Postar", "callback_data": f"ap:{post_id}"},
                {"text": "🕒 Agendar", "callback_data": f"ag:{post_id}"}],
               [{"text": "🔄 Refazer", "callback_data": f"rf:{post_id}"},
                {"text": "🗑 Descartar", "callback_data": f"ds:{post_id}"}]]
+    sug = db.one("SELECT agendado_para FROM posts WHERE id=? AND estado='aguardando_aprovacao' AND agendado_para IS NOT NULL", (post_id,))
+    if sug:  # esteira: um toque confirma o horário sugerido
+        linhas.insert(0, [{"text": f"✅ Agendar {_quando(sug['agendado_para'])}", "callback_data": f"ak:{post_id}"}])
     po = db.one("SELECT formato FROM posts WHERE id=?", (post_id,)) if imagem else None
     if po and po["formato"] in ("feed", "story"):
         linhas.append([{"text": "📐 Versão Story" if po["formato"] == "feed" else "📐 Versão Feed", "callback_data": f"ad:{post_id}"}])

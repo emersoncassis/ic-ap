@@ -49,10 +49,10 @@ def jpeg_dims(path):
         i += 2 + struct.unpack(">H", b[i + 2:i + 4])[0]
 
 
-def configurar_perfil(client, ativo=False, conexao=""):
+def configurar_perfil(client, ativo=False, conexao="", esteira="off"):
     post_form(client, "/perfis/1", nome="Emerson Assis", handle="@emerson_teste", ig_user_id="1784", ig_token="",
               telegram_chat_id="42", llm_conexao_id=str(conexao), horarios="09:00,18:00",
-              palavras_chave="IA", max_idade_horas="36", contexto_md=C.CONTEXT_FILE.read_text(),
+              palavras_chave="IA", max_idade_horas="36", contexto_md=C.CONTEXT_FILE.read_text(), esteira=esteira,
               **({"ativo": "on"} if ativo else {}))
 
 
@@ -1363,6 +1363,83 @@ def test_agendar_pelo_telegram_escolhe_horarios_livres_do_perfil(logado, fake):
     pipeline.desagendar(p["id"])
     for x in (p, p2):
         post_form(logado, f"/posts/{x['id']}/descartar")
+
+
+# ---------------- esteira: foto sem texto sai pronta (legenda, frase na imagem, trilha, horário sugerido) ----------------
+def _sem_trilhas():
+    for f in C.MUSICAS.glob("*") if C.MUSICAS.exists() else []:
+        f.unlink()
+
+
+def test_esteira_foto_sem_texto_vira_reel_pronto_com_trilha_padrao_e_horario(logado, fake):
+    configurar_perfil(logado, esteira="reel")
+    _sem_trilhas()
+    n = _n_midia()
+    fake.push_msg(42, "foto", "")
+    p = _novo_post(n)
+    assert p["formato"] == "reel" and p["arquivo"].endswith(".mp4") and p["estado"] == "aguardando_aprovacao"
+    assert p["legenda"].startswith("Infraestrutura boa") and p["reacao"] == "Infra boa não aparece. Funciona."
+    assert fake.st()["imagens"] >= 1, "a foto chegou ao modelo de visão"
+    info = _probe(C.CARDS / p["arquivo"])
+    assert (info["w"], info["h"]) == (1080, 1920) and info["audio"], "trilha padrão embutida mesmo sem músicas cadastradas"
+    assert p["agendado_para"] and p["agendado_para"] > __import__("app").db.now(), "horário sugerido reservado"
+    card = esperar(lambda: next((d for m, d in fake.st()["tg"] if m == "sendVideo" and "[REEL" in d["caption"]), None))
+    assert "texto na tela" in card["caption"] and f"ak:{p['id']}" in _botoes(card) and "✅ Agendar " in _botoes(card)
+    fake.push(f"ak:{p['id']}", "42")
+    esperar(lambda: pipeline.post(p["id"])["estado"] == "agendado")
+    assert pipeline.post(p["id"])["agendado_para"] == p["agendado_para"]
+    pipeline.desagendar(p["id"])
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
+
+def test_esteira_feed_tem_frase_na_imagem_legenda_e_sem_musica(logado, fake):
+    configurar_perfil(logado, esteira="feed")
+    n = _n_midia()
+    fake.push_msg(42, "foto", "")
+    p = _novo_post(n)
+    assert p["formato"] == "feed" and p["arquivo"].endswith(".jpg") and jpeg_dims(C.CARDS / p["arquivo"]) == (1080, 1350)
+    assert p["legenda"] and p["reacao"]
+    esperar(lambda: any(m == "sendPhoto" and "Feed de foto não leva música" in d["caption"] for m, d in fake.st()["tg"]))
+    # pedir outro formato na legenda continua valendo
+    n = _n_midia()
+    fake.push_msg(42, "foto", "story: bastidores do rack")
+    p2 = _novo_post(n)
+    assert p2["formato"] == "story" and p2["legenda"] == "" and p2["reacao"]
+    for x in (p, p2):
+        post_form(logado, f"/posts/{x['id']}/descartar")
+
+
+def test_esteira_lote_de_fotos_horarios_distintos_e_agendar_todos(logado, fake):
+    configurar_perfil(logado, esteira="feed")
+    pipeline.LOTE_ESPERA_S = 1
+    for r in db.q("SELECT id FROM posts WHERE estado='agendado'"):
+        pipeline.desagendar(r["id"])
+    n = _n_midia()
+    for _ in range(3):
+        fake.push_msg(42, "foto", "")
+    esperar(lambda: len(db.q("SELECT 1 FROM posts WHERE fonte='Telegram'")) >= n + 3)
+    novos = db.q("SELECT * FROM posts WHERE fonte='Telegram' ORDER BY id DESC LIMIT 3")
+    assert len({r["agendado_para"] for r in novos}) == 3 and all(r["agendado_para"] for r in novos)
+    resumo = esperar(lambda: next((d for m, d in fake.st()["tg"] if m == "sendMessage" and "at:0" in d.get("reply_markup", "")), None))
+    assert "3 posts prontos" in resumo["text"]
+    fake.push("at:0", "42")
+    esperar(lambda: all(pipeline.post(r["id"])["estado"] == "agendado" for r in novos))
+    assert {pipeline.post(r["id"])["agendado_para"] for r in novos} == {r["agendado_para"] for r in novos}
+    for r in novos:
+        pipeline.desagendar(r["id"])
+        post_form(logado, f"/posts/{r['id']}/descartar")
+
+
+def test_esteira_modelo_sem_visao_avisa_e_entrega_o_card(logado, fake):
+    configurar_perfil(logado, esteira="feed")
+    fake.set(foto_modo="sem_visao")
+    n = _n_midia()
+    fake.push_msg(42, "foto", "")
+    p = _novo_post(n)
+    assert p["legenda"] == "" and p["arquivo"].endswith(".jpg")
+    esperar(lambda: any(m == "sendPhoto" and "Não consegui analisar a foto" in d["caption"] for m, d in fake.st()["tg"]))
+    post_form(logado, f"/posts/{p['id']}/descartar")
+
 
 
 # ---------------- Aba Voz: gravação, limpeza e gestão de vozes clonadas ----------------

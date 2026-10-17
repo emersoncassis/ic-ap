@@ -245,10 +245,30 @@ async def acao_telegram(acao: str, post_id: int, chat_id: str) -> None:
             if po["tg_message_id"]:
                 await telegram.marcar(chat_id, po["tg_message_id"], f"🕒 Agendado para {quando}.")
         return
+    if acao == "at":  # agenda todos os pendentes da esteira nos horários sugeridos
+        pf = db.one("SELECT * FROM perfis WHERE telegram_chat_id=? AND telegram_chat_id!='' ORDER BY ativo DESC, id LIMIT 1", (chat_id,))
+        if not pf:
+            return
+        feitos = []
+        for r in db.q("SELECT * FROM posts WHERE perfil_id=? AND estado='aguardando_aprovacao' AND fonte='Telegram' ORDER BY agendado_para, id", (pf["id"],)):
+            quando = _agendar_sugerido(r, pf)
+            if quando:
+                feitos.append(f"• #{r['id']} → {quando}")
+                if r["tg_message_id"]:
+                    await telegram.marcar(chat_id, r["tg_message_id"], f"🕒 Agendado para {quando}.")
+        await telegram.avisar(chat_id, ("✅ Agendados:\n" + "\n".join(feitos)) if feitos else "Não há posts pendentes para agendar.")
+        return
     po = post(post_id)
     p = perfil(po["perfil_id"]) if po else None
     if not p or str(p["telegram_chat_id"]) != chat_id:
         return  # só o dono do perfil aprova os posts dele
+    if acao == "ak":  # confirma o horário sugerido no card
+        quando = _agendar_sugerido(po, p)
+        if quando and po["tg_message_id"]:
+            await telegram.marcar(chat_id, po["tg_message_id"], f"🕒 Agendado para {quando}.")
+        elif not quando:
+            await telegram.avisar(chat_id, "Esse post não pode ser agendado agora.")
+        return
     if acao == "ap":
         await aprovar(post_id, "telegram")
     elif acao == "rf":
@@ -357,7 +377,7 @@ def proximos_horarios(p: dict, n: int = 4) -> list[str]:
     from datetime import timedelta
     tz = ZoneInfo(settings.tz())
     horas = [h for h in (p.get("horarios") or "").split(",") if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", h.strip())] or ["09:00", "18:00"]
-    ocupados = {r["agendado_para"] for r in db.q("SELECT agendado_para FROM posts WHERE estado='agendado' AND perfil_id=?", (p["id"],))}
+    ocupados = {r["agendado_para"] for r in db.q("SELECT agendado_para FROM posts WHERE estado IN ('agendado','aguardando_aprovacao','rascunho') AND agendado_para IS NOT NULL AND perfil_id=?", (p["id"],))}
     agora = datetime.now(tz) + timedelta(minutes=5)
     out = []
     for dia in range(0, 15):
@@ -397,6 +417,7 @@ AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
          "• Montar/rever o perfil: /perfil (eu faço perguntas e proponho o texto; você confirma)\n"
          "• Ideias de posts: /ideias, ou peça um tema\n"
          "• Gerar: “faz um carrossel de 6 slides sobre X”, “um story sobre Y”, “2 versões para testar”\n"
+         "• Foto: é só mandar (pode ser um monte de uma vez). Eu olho a imagem, escrevo a legenda e uma frase sobre a foto, ponho trilha e sugiro o horário; você só dá OK. Escrever “feed”, “story” ou “reel” na legenda troca o formato\n"
          "• Foto ou vídeo: escreva o pedido na legenda. Ex.: “story animado com música e um texto sério, tom de CEO”, “reel sem música”, “feed: treino de hoje”\n"
          "• Vídeo: “corta os silêncios”, “legenda animada” (precisa de Transcrição em Conexões). Foto: “narra: …” ou só “com narração” (precisa de Voz em Conexões)\n"
          "• Marca: “meu fundo é azul escuro #0b1f3a e o destaque é amarelo”; logotipo: envie o arquivo com a legenda “logo”\n"
@@ -527,22 +548,43 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
     formato, descricao, sem_musica = _destino(tipo, texto)
     ped = _pedidos(texto)
     con = conexao_do_perfil(p)
+    # esteira: toda foto sai pronta (legenda, frase sobre a imagem, trilha). O padrão do perfil vale quando o autor não escreveu story/reel/feed.
+    auto = tipo == "foto" and p["esteira"] in ("reel", "feed", "story")
+    if auto and not re.search(r"(?i)\b(story|stories|reels?|feed)\b", texto or ""):
+        formato = p["esteira"]
+    if auto and formato in ("reel", "story"):
+        ped = {**ped, "animar": True}
     avisos: list[str] = []
     extras: list[str] = []
     tmp: list = []  # arquivos temporários a apagar no fim
     palavras: list[dict] = []
-    animado = tipo == "foto" and formato == "story" and (ped["animar"] or ped["musica"])
-    quer_musica = not sem_musica and ((tipo == "video" and (p["musica_modo"] == "aleatoria" or ped["musica"]))
+    animado = tipo == "foto" and (formato == "story" or (auto and formato == "reel")) and (ped["animar"] or ped["musica"])
+    quer_musica = not sem_musica and ((auto and animado) or (tipo == "video" and (p["musica_modo"] == "aleatoria" or ped["musica"]))
                                       or (tipo == "foto" and (animado or ped["narrar"] or ped["ia"]) and (ped["musica"] or p["musica_modo"] == "aleatoria")))
     musica = None
     if quer_musica:
         musica = midia.escolher_musica()
-        if not musica:
+        if not musica and auto:
+            musica = await midia.trilha_padrao()  # sem músicas cadastradas: trilha suave própria
+        elif not musica:
             avisos.append("ℹ️ Pediu música, mas não há músicas cadastradas (menu Músicas do painel).")
     mencoes = list(dict.fromkeys(m.rstrip(".") for m in re.findall(r"@[A-Za-z0-9_.]{2,30}", texto or "")))
     texto_tela, overlay, audio_fala, dur_fala = "", None, None, 7.0
     fonte_ia = None
+    analise: dict | None = None
     try:
+        # --- esteira: o modelo olha a foto e escreve legenda e frase sobre a imagem ---
+        if auto:
+            if not con or not con["modelo"]:
+                avisos.append("⚠️ Nenhum LLM configurado: sem legenda nem frase na imagem (menu LLM do painel).")
+            else:
+                try:
+                    analise = await llm.analisar_foto(con, p["contexto_md"], await midia.miniatura_b64(src), descricao)
+                    descricao = descricao or analise["descricao"]
+                    texto_tela = analise["texto_tela"]
+                except Exception as e:
+                    db.log(p["id"], None, "analise_foto_falhou", str(e))
+                    avisos.append(f"⚠️ Não consegui analisar a foto: {str(e)[:200]}")
         # --- vídeo por IA (Higgsfield): a foto vira um clipe curto; daqui em diante segue como vídeo ---
         if ped["ia"] and tipo == "foto":
             try:
@@ -606,7 +648,7 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
         if tipo == "foto" and ped["legendar"] and not audio_fala:
             avisos.append("ℹ️ Legendas animadas precisam de fala: use em vídeo com voz ou junto com “narração”.")
         # --- texto na tela (Story) e menções ---
-        if formato == "story" and ped["texto"] and not audio_fala:
+        if formato == "story" and ped["texto"] and not audio_fala and not texto_tela:
             if not con or not con["modelo"]:
                 avisos.append("⚠️ Nenhum LLM configurado: Story sem texto na tela.")
             else:
@@ -615,8 +657,8 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
                 except Exception as e:
                     db.log(p["id"], None, "texto_story_falhou", str(e))
                     avisos.append(f"⚠️ Não consegui escrever o texto da tela: {str(e)[:120]}")
-        if formato == "story" and (texto_tela or mencoes):
-            overlay = await render.overlay_story(texto_tela, "", p, mencoes)
+        if (formato == "story" or (auto and tipo == "foto")) and (texto_tela or mencoes):
+            overlay = await render.overlay_story(texto_tela, "", p, mencoes, altura=1350 if formato == "feed" else 1920)
         # --- montagem ---
         if tipo == "video":
             arquivo = await midia.video(fonte, formato, musica, overlay)
@@ -641,28 +683,92 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
         avisos.append("ℹ️ Menção: vai escrita na imagem e também como menção real pela API (a pessoa é notificada). Não dá para criar adesivos de link/enquete pela API.")
     legenda = ""
     if formato != "story":
-        if not descricao:
+        if analise:
+            legenda = analise["legenda_instagram"]
+        elif not descricao:
             avisos.append("ℹ️ Sem frase de contexto: legenda em branco. Edite no painel ou mande de novo com uma frase.")
         elif not con or not con["modelo"]:
             avisos.append("⚠️ Nenhum LLM configurado: legenda em branco.")
         else:
             legenda = await llm.legenda_midia(con, p["contexto_md"], descricao, "vídeo" if arquivo.endswith(".mp4") else "foto")
-            falta = [m for m in mencoes if m.lower() not in legenda.lower()]
-            if falta:
-                legenda += "\n\n" + " ".join(falta)
+        falta = [m for m in mencoes if legenda and m.lower() not in legenda.lower()]
+        if falta:
+            legenda += "\n\n" + " ".join(falta)
     pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,mencoes,criado_em,atualizado_em)"
                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                (p["id"], "aguardando_aprovacao", (descricao or "Mídia do Telegram")[:120], "Telegram", descricao, texto_tela, legenda,
                 arquivo, formato, ",".join(mencoes), db.now(), db.now()))
+    sugestao = _sugerir_horario(p, pid) if auto else ""
     db.log(p["id"], pid, "midia_recebida", f"{tipo} -> {formato}" + (" animado" if animado else "") +
            (f" musica={musica.name}" if musica else "") + (" texto" if texto_tela else "") + (" " + ",".join(extras) if extras else ""))
     if p["telegram_chat_id"]:
+        if auto and formato == "feed":
+            avisos.append("ℹ️ Feed de foto não leva música (o Instagram só aceita trilha em vídeo). Use “reel” para ter trilha.")
         resumo = formato.upper() + (" · animado" if animado and "narrado" not in extras else "") + (f" · trilha: {musica.stem}" if musica else "") + \
             (f" · texto na tela: “{texto_tela}”" if texto_tela else "") + "".join(f" · {x}" for x in extras)
         mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / arquivo, pid,
                                          (legenda or "(sem legenda)") + f"\n\n[{resumo}]", "\n".join(avisos))
         db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+        if auto:
+            _resumo_do_lote(p)
     return pid
+
+
+# ---------------- esteira: horário sugerido e resumo do lote ----------------
+def _sugerir_horario(p: dict, post_id: int) -> str:
+    """Reserva o próximo horário livre do perfil como SUGESTÃO do post (o post continua aguardando aprovação)."""
+    slots = proximos_horarios(p, 1)
+    quando = _utc(slots[0], settings.tz()) if slots else None
+    if quando:
+        db.x("UPDATE posts SET agendado_para=? WHERE id=? AND estado='aguardando_aprovacao'", (quando, post_id))
+    return quando or ""
+
+
+def _agendar_sugerido(po: dict, p: dict) -> str:
+    """Confirma o horário sugerido (ou o próximo livre, se o sugerido já passou). Devolve 'dd/mm HH:MM' ou ''."""
+    if po["estado"] not in ESTADOS_ABERTOS or not po["arquivo"]:
+        return ""
+    quando = po["agendado_para"]
+    if not quando or quando <= db.now():
+        slots = proximos_horarios(p, 1)
+        quando = _utc(slots[0], settings.tz()) if slots else None
+    if not quando:
+        return ""
+    db.x("UPDATE posts SET estado='agendado', agendado_para=?, atualizado_em=? WHERE id=?", (quando, db.now(), po["id"]))
+    db.log(p["id"], po["id"], "agendado", f"telegram {local(quando)}")
+    return local(quando)
+
+
+LOTE_ESPERA_S = 20
+_LOTE_N: dict[str, int] = {}
+_LOTE_TASK: dict[str, asyncio.Task] = {}
+_MIDIA_SEM = asyncio.Semaphore(2)  # fotos em lote: duas por vez, para não afogar o LLM/ffmpeg
+
+
+def _resumo_do_lote(p: dict) -> None:
+    """Quando chegam várias fotos seguidas, depois de ~20 s sem novas manda UMA mensagem com o botão 'agendar todos'."""
+    chat = str(p["telegram_chat_id"])
+    _LOTE_N[chat] = _LOTE_N.get(chat, 0) + 1
+    antiga = _LOTE_TASK.get(chat)
+    if antiga and not antiga.done():
+        antiga.cancel()
+    _LOTE_TASK[chat] = asyncio.create_task(_enviar_resumo(p, chat))
+
+
+async def _enviar_resumo(p: dict, chat: str) -> None:
+    try:
+        await asyncio.sleep(LOTE_ESPERA_S)
+    except asyncio.CancelledError:
+        return
+    n = _LOTE_N.pop(chat, 0)
+    if n < 2:
+        return
+    prontos = db.q("SELECT id, agendado_para FROM posts WHERE perfil_id=? AND estado='aguardando_aprovacao' AND fonte='Telegram' ORDER BY id", (p["id"],))
+    if len(prontos) < 2:
+        return
+    horas = "\n".join(f"• #{r['id']} → {local(r['agendado_para'])}" for r in prontos if r["agendado_para"])
+    await telegram.enviar_botoes(chat, f"📦 {len(prontos)} posts prontos nos cards acima. Horários sugeridos:\n{horas}\n\nSe estiver tudo certo, é só um toque:",
+                                 [[(f"🕒 Agendar os {len(prontos)} nos horários sugeridos", "at:0")]])
 
 
 async def mensagem_telegram(msg: dict) -> None:
@@ -701,7 +807,8 @@ async def mensagem_telegram(msg: dict) -> None:
         elif eh_meme:
             await criar_meme_foto(p, src, texto)
         else:
-            await criar_de_midia(p, tipo, src, texto)
+            async with _MIDIA_SEM:
+                await criar_de_midia(p, tipo, src, texto)
     except Exception as e:
         db.log(p["id"], None, "midia_falhou", str(e))
         await telegram.avisar(chat_id, f"Não consegui preparar a mídia: {str(e)[:200]}")

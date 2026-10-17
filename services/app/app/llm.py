@@ -116,7 +116,8 @@ def _alternar(msgs: list[dict]) -> list[dict]:
 
 
 async def _chat(con: dict, system: str, user: str, temperature: float, schema: dict | None = None,
-                historico: list[dict] | None = None) -> str:
+                historico: list[dict] | None = None, imagem: str | None = None) -> str:
+    """imagem: JPEG em base64 anexado à última mensagem (modelos com visão)."""
     schema = schema or SCHEMA
     tipo, modelo, base, key = con["tipo"], con["modelo"], con["base_url"].rstrip("/"), con.get("api_key", "")
     if not modelo:
@@ -125,6 +126,13 @@ async def _chat(con: dict, system: str, user: str, temperature: float, schema: d
         raise LLMError(f"a conexão “{con.get('nome', tipo)}” está sem chave de API: abra o menu LLM, edite a conexão, cole a chave e clique em Aplicar e testar")
     turnos = _alternar([*(historico or []), {"role": "user", "content": user}])
     msgs = [{"role": "system", "content": system}, *turnos]
+    if imagem and tipo in ("openai", "ollama"):
+        ult = dict(msgs[-1])
+        if tipo == "openai":
+            ult["content"] = [{"type": "text", "text": ult["content"]}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + imagem}}]
+        else:
+            ult["images"] = [imagem]
+        msgs[-1] = ult
     async with httpx.AsyncClient(timeout=300) as c:
         try:
             if tipo == "openai":
@@ -145,14 +153,18 @@ async def _chat(con: dict, system: str, user: str, temperature: float, schema: d
             if tipo == "gemini":
                 r = await c.post(f"{C.GEMINI_API_BASE}/models/{modelo}:generateContent", headers={"x-goog-api-key": key}, json={
                     "systemInstruction": {"parts": [{"text": system}]},
-                    "contents": [{"role": "user" if t["role"] == "user" else "model", "parts": [{"text": t["content"]}]} for t in turnos],
+                    "contents": [{"role": "user" if t["role"] == "user" else "model", "parts": [{"text": t["content"]}] + (
+                        [{"inlineData": {"mimeType": "image/jpeg", "data": imagem}}] if imagem and i == len(turnos) - 1 else [])}
+                        for i, t in enumerate(turnos)],
                     "generationConfig": {"temperature": temperature, "responseMimeType": "application/json"}})
                 r.raise_for_status()
                 return r.json()["candidates"][0]["content"]["parts"][0]["text"]
             if tipo == "anthropic":
                 r = await c.post(f"{C.ANTHROPIC_API_BASE}/messages", headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, json={
                     "model": modelo, "max_tokens": 3000, "temperature": min(temperature, 1.0), "system": system,
-                    "messages": turnos})
+                    "messages": turnos if not imagem else [*turnos[:-1], {"role": "user", "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": imagem}},
+                        {"type": "text", "text": turnos[-1]["content"]}]}]})
                 r.raise_for_status()
                 return r.json()["content"][0]["text"]
         except LLMError:
@@ -488,6 +500,35 @@ async def texto_story(con: dict, contexto: str, pedido: str, temperature: float 
         except ValueError as e:
             ultimo = str(e)
     raise ValueError(f"o modelo não entregou um texto válido ({ultimo})")
+
+
+SCHEMA_FOTO = {"type": "object", "properties": {"descricao": _STR, "legenda_instagram": _STR, "texto_tela": _STR},
+               "required": ["descricao", "legenda_instagram", "texto_tela"]}
+
+
+async def analisar_foto(con: dict, contexto: str, imagem_b64: str, dica: str = "", temperature: float = 0.8) -> dict:
+    """Olha a foto do autor (modelo com visão) e devolve {descricao, legenda_instagram, texto_tela}: tudo no tom dele, pronto para o card."""
+    system = (f"{contexto.strip()}\n\n---\nVocê recebe uma foto do próprio autor e deixa o post de Instagram pronto, em primeira pessoa e no tom dele. "
+              "Olhe a imagem e entenda o contexto: o que aparece, o ambiente, o assunto e a mensagem que ela passa para o público dele. "
+              "NÃO reconheça pessoas pelo rosto e não invente nomes, lugares ou fatos que não estejam visíveis ou na dica do autor. "
+              "'descricao': 1 ou 2 frases objetivas do que a foto mostra. "
+              "'legenda_instagram': legenda de até 600 caracteres, ligada ao que está na foto, com uma chamada para ação curta e 3 a 5 hashtags. "
+              "'texto_tela': frase curta e marcante para escrever EM CIMA da imagem (máximo 70 caracteres, sem hashtags, sem emoji, sem aspas), "
+              "que comenta o que a foto mostra, e não a descreve de forma seca. "
+              'Responda SOMENTE com JSON: {"descricao": "...", "legenda_instagram": "...", "texto_tela": "..."}')
+    ultimo = ""
+    for _ in range(3):
+        user = "Foto em anexo." + (f" Dica do autor: {dica}" if dica else "") + _feedback(ultimo)
+        try:
+            d = parse(await _chat(con, system, user, temperature, SCHEMA_FOTO, imagem=imagem_b64))
+            desc, leg, tela = (str(d.get(k) or "").strip().strip('"') for k in ("descricao", "legenda_instagram", "texto_tela"))
+            if not (desc and leg and 3 <= len(tela) <= 140 and len(leg) <= 2200):
+                ultimo = "campo ausente, texto_tela fora de 3 a 140 caracteres ou legenda longa demais"
+                continue
+            return {"descricao": desc, "legenda_instagram": leg, "texto_tela": tela}
+        except ValueError as e:
+            ultimo = str(e)
+    raise ValueError(f"o modelo não entregou o texto da foto ({ultimo}). Confira se o modelo escolhido enxerga imagens (visão).")
 
 
 SCHEMA_CITACAO = {"type": "object", "properties": {"frase": _STR, "autor": _STR, "legenda": _STR, "busca": _STR}, "required": ["frase", "autor", "legenda", "busca"]}

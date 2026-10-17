@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 def make(port: int) -> FastAPI:
     app = FastAPI()
-    st = {"agente": [], "carrossel_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False, "banco": [], "voz": [], "whisper_modo": "ok", "voz_modo": "ok"}
+    st = {"agente": [], "carrossel_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False, "banco": [], "voz": [], "whisper_modo": "ok", "voz_modo": "ok", "imagens": 0, "foto_modo": "ok"}
     app.state.st = st
 
     @app.get("/_st")
@@ -101,6 +101,11 @@ def make(port: int) -> FastAPI:
         if "cria um meme" in system:
             return json.dumps({"topo": "Quando o relatório fecha", "base": "mas o dado era de outro cliente",
                                "legenda": "Todo mundo já passou por isso. #ia #dados #humor #empresas #gestao", "busca": "surprised office"}, ensure_ascii=False)
+        if "recebe uma foto do próprio autor" in system:
+            if st["foto_modo"] == "sem_visao":
+                return "não consigo ver imagens"
+            return json.dumps({"descricao": "Rack de servidores com cabos de rede.", "legenda_instagram": "Infraestrutura boa não aparece, funciona. #ia #infra #rede #servidor #tecnologia",
+                               "texto_tela": "Infra boa não aparece. Funciona."}, ensure_ascii=False)
         if "roteiro de narração" in system:
             return json.dumps({"texto": "Hoje eu parei para pensar em disciplina, porque ela sustenta o resultado quando a motivação acaba."}, ensure_ascii=False)
         if "texto curto que aparece NA TELA" in system:
@@ -129,6 +134,7 @@ def make(port: int) -> FastAPI:
     @app.post("/api/chat")
     async def chat(request: Request):
         b = await request.json()
+        st["imagens"] += len(b["messages"][-1].get("images") or [])
         return {"message": {"role": "assistant", "content": conteudo(b["messages"][-1]["content"], b["messages"][0]["content"], len(b["messages"]) - 1)}}
 
     # --- OpenAI-compatível (LM Studio, Jan, llama.cpp…) ---
@@ -142,7 +148,11 @@ def make(port: int) -> FastAPI:
         b = await request.json()
         if st["openai_no_format"] and "response_format" in b:
             return JSONResponse({"error": {"message": "response_format não suportado"}}, status_code=400)
-        return {"choices": [{"message": {"role": "assistant", "content": conteudo(b["messages"][-1]["content"], b["messages"][0]["content"], len(b["messages"]) - 1)}}]}
+        ult = b["messages"][-1]["content"]
+        if isinstance(ult, list):
+            st["imagens"] += sum(1 for x in ult if x.get("type") == "image_url")
+            ult = "".join(x.get("text", "") for x in ult if x.get("type") == "text")
+        return {"choices": [{"message": {"role": "assistant", "content": conteudo(ult, b["messages"][0]["content"], len(b["messages"]) - 1)}}]}
 
     # --- Gemini ---
     @app.get("/gemini/models")

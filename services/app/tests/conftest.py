@@ -74,6 +74,8 @@ def client(fake_server):
 @pytest.fixture
 def fake():
     httpx.post(f"{FAKE}/_reset")
+    from app import db
+    db.x("UPDATE perfis SET esteira='off'")  # os testes antigos cobrem o fluxo manual; a esteira tem testes próprios
     class F:
         def st(self): return httpx.get(f"{FAKE}/_st").json()
         def set(self, **kw): httpx.post(f"{FAKE}/_set", json=kw)
