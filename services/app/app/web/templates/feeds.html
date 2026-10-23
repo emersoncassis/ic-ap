@@ -1,0 +1,141 @@
+{% extends "base.html" %}{% block title %}Feeds de Notícias & Pautas · ic-ap{% endblock %}
+{% block body %}
+<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+  <div>
+    <h1 style="margin:0">Feeds de Notícias & Pautas</h1>
+    <p class="sub" style="margin:4px 0 0">
+      Fontes de conteúdo monitoradas para o perfil <b>{{ perfil.nome if perfil else 'Geral' }}</b> 
+      {% if perfil and perfil.palavras_chave %}(Filtro: <code>{{ perfil.palavras_chave }}</code>){% endif %}
+    </p>
+  </div>
+  {% if perfil %}
+  <form method="post" action="/feeds/buscar-agora" style="margin:0">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" style="background:var(--acc);color:#fff;font-weight:600;padding:8px 18px;border-radius:6px;border:none">
+      🔍 Buscar Notícias Agora (Testar Feeds)
+    </button>
+  </form>
+  {% endif %}
+</div>
+
+{% if perfil %}
+<div style="background:rgba(255,122,26,0.08);border:1px solid var(--acc);border-radius:8px;padding:10px 14px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+  <span style="font-size:13px">💡 <b>Cada perfil tem seus próprios feeds:</b> Você também pode gerenciar as fontes e sincronizá-las em contexto com a análise do <b>Meta AI</b> direto na edição de <b>{{ perfil.nome }}</b>.</span>
+  <a href="/perfis/{{ perfil.id }}#feeds" style="font-size:12px;font-weight:600;background:var(--acc);color:#fff;padding:5px 12px;border-radius:6px;text-decoration:none">Abrir Feeds do Perfil →</a>
+</div>
+{% endif %}
+
+<!-- Packs Rápidos de Feeds em 1 Clique -->
+<div class="card" style="background:#131822;border:1px solid var(--line);margin-bottom:20px;padding:20px">
+  <h3 style="margin:0 0 8px;display:flex;align-items:center;gap:8px">
+    <span>⚡</span> Packs Recomendados por Nicho (Vincular em 1 Clique)
+  </h3>
+  <p class="mut" style="font-size:13px;margin:0 0 16px">
+    Adicione as melhores fontes curadas do seu mercado diretamente ao perfil atual.
+  </p>
+  
+  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(250px, 1fr));gap:12px">
+    {% for k, pack in pacotes.items() %}
+    <div style="background:#0e121a;border:1px solid var(--line);border-radius:8px;padding:14px;display:flex;flex-direction:column;justify-content:space-between">
+      <div>
+        <b style="color:var(--fg);font-size:14px;display:block;margin-bottom:4px">{{ pack.nome }}</b>
+        <p class="mut" style="font-size:12px;margin:0 0 10px;line-height:1.4">{{ pack.descricao }}</p>
+      </div>
+      <form method="post" action="/feeds/importar-pack" style="margin:0">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="pack_id" value="{{ k }}">
+        <button type="submit" class="sec" style="width:100%;font-size:12px;padding:6px 10px">
+          + Importar Pack para Este Perfil
+        </button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Feeds Exclusivos do Perfil -->
+<h2>Feeds Exclusivos de {{ perfil.nome if perfil else 'Perfil Atual' }}</h2>
+{% if feeds_perfil %}
+<div class="card" style="margin-bottom:24px">
+  <table>
+    <tr><th>Nome</th><th>URL RSS</th><th>Tema</th><th>Status</th><th>Ações</th></tr>
+    {% for f in feeds_perfil %}
+    <tr>
+      <td><b>{{ f.nome }}</b></td>
+      <td><small style="color:var(--mut)">{{ f.url }}</small></td>
+      <td><span class="badge" style="font-size:11px">{{ f.tema or 'geral' }}</span></td>
+      <td><span class="badge {{ 'publicado' if f.ativo else 'falhou' }}">{{ 'Ativo' if f.ativo else 'Inativo' }}</span></td>
+      <td class="acts" style="margin:0">
+        <form method="post" action="/feeds/{{ f.id }}/alternar">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="sec" style="font-size:12px;padding:4px 8px">{{ 'Desligar' if f.ativo else 'Ligar' }}</button>
+        </form>
+        <form method="post" action="/feeds/{{ f.id }}/remover">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="bad" style="font-size:12px;padding:4px 8px">Remover</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<p class="mut" style="margin-bottom:20px">Nenhum feed exclusivo vinculado a este perfil ainda. Escolha um pack acima ou adicione abaixo.</p>
+{% endif %}
+
+<!-- Feeds Globais -->
+<h2>Feeds Globais do Sistema <small class="mut">(disponíveis para todos os perfis)</small></h2>
+<div class="card" style="margin-bottom:24px">
+  <table>
+    <tr><th>Nome</th><th>URL RSS</th><th>Tema</th><th>Status</th><th>Ações</th></tr>
+    {% for f in feeds_globais %}
+    <tr>
+      <td>{{ f.nome }}</td>
+      <td><small style="color:var(--mut)">{{ f.url }}</small></td>
+      <td><span class="badge" style="font-size:11px">{{ f.tema or 'geral' }}</span></td>
+      <td><span class="badge {{ 'publicado' if f.ativo else 'falhou' }}">{{ 'Ativo' if f.ativo else 'Inativo' }}</span></td>
+      <td class="acts" style="margin:0">
+        <form method="post" action="/feeds/{{ f.id }}/alternar">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="sec" style="font-size:12px;padding:4px 8px">{{ 'Desligar' if f.ativo else 'Ligar' }}</button>
+        </form>
+        <form method="post" action="/feeds/{{ f.id }}/remover">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="bad" style="font-size:12px;padding:4px 8px">Remover</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<!-- Formulário Adicionar Novo Feed -->
+<h2>Adicionar Feed RSS Manual</h2>
+<form method="post" action="/feeds" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="row">
+    <div>
+      <label>Nome do Veículo / Fonte</label>
+      <input name="nome" placeholder="Ex.: CISO Advisor Brasil" required>
+    </div>
+    <div>
+      <label>URL do RSS</label>
+      <input name="url" placeholder="https://exemplo.com/feed/" required>
+    </div>
+    <div>
+      <label>Tema ou Categoria</label>
+      <input name="tema" placeholder="Ex.: cibersegurança">
+    </div>
+    <div>
+      <label>Vincular a:</label>
+      <select name="escopo">
+        <option value="perfil" selected>Só este perfil ({{ perfil.nome if perfil else 'Atual' }})</option>
+        <option value="global">Todos os perfis (Global)</option>
+      </select>
+    </div>
+  </div>
+  <div class="acts" style="margin-top:16px">
+    <button type="submit">Adicionar e Ativar Feed</button>
+  </div>
+</form>
+{% endblock %}

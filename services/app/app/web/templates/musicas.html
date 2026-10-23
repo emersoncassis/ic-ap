@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}Músicas · ic-ap{% endblock %}
+{% block body %}
+<h1>Músicas</h1>
+<p class="sub">Trilhas que o app mixa nos vídeos que você manda pelo Telegram (perfil com “música automática” ligada). A escolha é aleatória.</p>
+<form method="post" action="/musicas" enctype="multipart/form-data" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Adicionar (mp3, m4a, wav, ogg, aac · até 30 MB cada)</label>
+  <input type="file" name="arquivo" multiple accept=".mp3,.m4a,.wav,.ogg,.aac,audio/*">
+  <div class="acts"><button type="submit">Enviar</button></div>
+  <small>Use só músicas com licença que permita uso em redes sociais e comercial (ex.: Pixabay Music, YouTube Audio Library com licença sem atribuição, Uppbeat/Free Music Archive conforme a licença de cada faixa). Guarde o comprovante da licença. Músicas comerciais podem ser silenciadas ou bloqueadas pelo Instagram.</small>
+</form>
+<h2>Biblioteca ({{ lista|length }})</h2>
+<div class="card">
+  <table>{% for m in lista %}<tr><td>{{ m.nome }}</td><td class="mut">{{ m.mb }} MB</td>
+    <td style="text-align:right"><form method="post" action="/musicas/remover" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="nome" value="{{ m.nome }}"><button class="bad" type="submit">Remover</button></form></td></tr>
+  {% else %}<tr><td class="mut">Nenhuma música ainda.</td></tr>{% endfor %}</table>
+</div>
+{% endblock %}

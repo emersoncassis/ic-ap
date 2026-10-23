@@ -1,0 +1,163 @@
+{% extends "base.html" %}{% block title %}Fila & Conteúdo · ic-ap{% endblock %}
+{% block body %}
+<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:24px">
+  <div>
+    <h1 style="margin:0;display:flex;align-items:center;gap:10px">
+      <span>📮</span> Fila de Conteúdo & Aprovação
+    </h1>
+    <p class="sub" style="margin:6px 0 0">
+      {{ perfil.nome if perfil else 'Nenhum perfil selecionado' }}
+      {% if perfil and not perfil.ativo %}
+        · <span class="err">perfil pausado: o agendador não publica posts</span>
+      {% else %}
+        · <span style="color:var(--ok)">● Ativo & Pronto</span>
+      {% endif %}
+    </p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <a class="btn sec" href="/">🔄 Atualizar</a>
+    <a href="/agentes" class="btn cyan" style="text-decoration:none">🤖 Painel de Agentes</a>
+  </div>
+</div>
+
+{% if sem_llm %}
+<div class="flash aviso">
+  ⚠️ Nenhum modelo de linguagem (LLM) conectado. <a href="/conexoes">Configure sua conexão</a> para os agentes gerarem conteúdo.
+</div>
+{% endif %}
+
+{% if perfil %}
+<!-- Barra Rápida de Disparo de Conteúdo -->
+<div class="card" style="margin-bottom:24px;border:1px solid rgba(0,240,255,0.2);background:linear-gradient(135deg,rgba(11,15,23,0.95),rgba(18,24,38,0.95))">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:20px">✨</span>
+      <strong style="font-size:15px">Geração Rápida de Conteúdo</strong>
+      <span class="mut" style="font-size:13px">— Acione pelo painel ou envie uma mensagem direta no Telegram</span>
+    </div>
+    <span class="badge" style="color:var(--cyan);border-color:var(--cyan);background:rgba(0,240,255,0.08)">Orquestrador Ativo</span>
+  </div>
+  <form method="post" action="/gerar" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="perfil_id" value="{{ perfil.id }}">
+    <button type="submit" class="btn" style="background:var(--grad-cyan);color:#05070a;font-weight:700" {{ 'disabled' if gerando }}>
+      {{ '⏳ Gerando...' if gerando else '⚡ Gerar Post Estratégico Agora' }}
+    </button>
+    <a href="/pauta" class="btn sec" style="text-decoration:none">📰 Pesquisar Notícias em Alta</a>
+    <span class="mut" style="font-size:13px;margin-left:auto">Dica: No Telegram envie <code>/reels</code>, <code>/story</code> ou <code>/carrossel</code></span>
+  </form>
+</div>
+{% endif %}
+
+<!-- Lista de Posts na Fila -->
+<div class="grid">
+{% for p in posts %}
+  <div class="card post" style="display:flex;flex-direction:column;gap:16px">
+    <!-- Visual / Mídia -->
+    <div style="background:#070a0f;border-radius:12px;overflow:hidden;border:1px solid var(--line);text-align:center;position:relative">
+      {% if p.arquivo and p.arquivo.endswith('.mp4') %}
+        <video src="/cards/{{ p.arquivo }}" controls style="width:100%;max-height:480px;border-radius:12px"></video>
+      {% elif p.arquivo %}
+        <a href="/cards/{{ p.arquivo }}" target="_blank">
+          <img src="/cards/{{ p.arquivo }}" alt="card" style="width:100%;max-height:480px;object-fit:cover;display:block">
+        </a>
+      {% else %}
+        <div class="mut" style="padding:48px 16px">Sem imagem anexada</div>
+      {% endif %}
+
+      <!-- Badge de Formato sobreposto -->
+      <div style="position:absolute;top:10px;left:10px;display:flex;gap:6px">
+        <span class="badge" style="background:rgba(5,7,10,0.85);backdrop-filter:blur(6px);border:1px solid var(--line)">
+          {% if p.formato == 'reels' %}🎬 Reels 9:16
+          {% elif p.formato == 'story' %}📱 Story 9:16
+          {% elif p.formato == 'carrossel' %}📑 Carrossel
+          {% else %}🖼️ Feed 4:5{% endif %}
+        </span>
+      </div>
+    </div>
+
+    <!-- Miniaturas de Slides se for Carrossel -->
+    {% if p.formato == 'carrossel' and p.arquivos %}
+      {% set slides = p.arquivos | from_json %}
+      {% if slides and (slides | length) > 1 %}
+      <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px">
+        {% for s in slides %}
+        <a href="/cards/{{ s }}" target="_blank" style="flex-shrink:0">
+          <img src="/cards/{{ s }}" style="width:54px;height:68px;object-fit:cover;border-radius:6px;border:1px solid var(--line)">
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endif %}
+
+    <!-- Dados do Conteúdo -->
+    <div style="flex:1;display:flex;flex-direction:column;justify-content:space-between">
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span class="badge {{ p.estado }}">{{ p.estado.replace('_',' ') }}</span>
+          <small class="mut">#{{ p.id }} · {{ p.fonte }}</small>
+        </div>
+        <h2 style="margin:0 0 8px;font-size:18px;line-height:1.4">{{ p.manchete or p.noticia_titulo or 'Post sem título' }}</h2>
+
+        {% if p.noticia_url %}
+        <div style="margin-bottom:12px">
+          <small><a href="{{ p.noticia_url }}" target="_blank" rel="noopener" style="color:var(--cyan);word-break:break-all">🔗 Fonte original da notícia</a></small>
+        </div>
+        {% endif %}
+
+        {% if p.erro %}
+        <div class="flash erro" style="margin-bottom:12px">❌ {{ p.erro }}</div>
+        {% endif %}
+
+        {% if p.estado in ('aguardando_aprovacao','falhou') %}
+        <form method="post" action="/posts/{{ p.id }}/legenda" style="margin-bottom:12px">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label style="font-size:12px;font-weight:600;text-transform:uppercase;color:var(--mut);letter-spacing:0.5px">Legenda Completa</label>
+          <textarea name="legenda" rows="4" style="font-size:13px;line-height:1.5;margin-top:4px">{{ p.legenda or '' }}</textarea>
+          <div class="acts" style="margin-top:6px">
+            <button class="sec" type="submit" style="font-size:12px;padding:6px 12px">💾 Salvar Legenda</button>
+          </div>
+        </form>
+        {% endif %}
+      </div>
+
+      <!-- Ações -->
+      {% if p.estado in ('aguardando_aprovacao','falhou') %}
+      <div style="border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <form method="post" action="/posts/{{ p.id }}/hashtags">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="sec" type="submit" style="font-size:12px;padding:6px 10px">#️⃣ Novas Hashtags</button>
+          </form>
+
+          {% if p.arquivo and p.arquivo.endswith('.jpg') and p.formato in ('feed','story') %}
+          <form method="post" action="/posts/{{ p.id }}/adaptar-{{ 'story' if p.formato=='feed' else 'feed' }}">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="sec" type="submit" style="font-size:12px;padding:6px 10px">📐 Versão {{ 'Story' if p.formato=='feed' else 'Feed' }}</button>
+          </form>
+          {% endif %}
+        </div>
+
+        <div class="acts" style="margin-top:4px">
+          {% for a, rot, cls in [('aprovar','✅ Postar Agora','btn'),('refazer','🔄 Refazer','sec'),('descartar','🗑️ Descartar','bad')] %}
+          <form method="post" action="/posts/{{ p.id }}/{{ a }}">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="{{ cls }}" type="submit" {% if a=='aprovar' %}onclick="return confirm('Publicar no Instagram agora?')"{% endif %}>
+              {{ 'Tentar de novo' if a=='aprovar' and p.estado=='falhou' else rot }}
+            </button>
+          </form>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+{% else %}
+  <div class="card mut" style="grid-column:1/-1;text-align:center;padding:48px 16px">
+    <div style="font-size:48px;margin-bottom:12px">🎉</div>
+    <h3 style="margin:0 0 8px;color:#e6edf5">Tudo limpo na fila!</h3>
+    <p style="margin:0 0 16px">Envie uma ideia pelo Telegram ou clique em <strong>Gerar Post Estratégico Agora</strong> acima.</p>
+  </div>
+{% endfor %}
+</div>
+{% endblock %}

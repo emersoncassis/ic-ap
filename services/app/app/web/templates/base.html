@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}ic-ap · Esteira de Conteúdo & Agentes{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0d14;--card:#121722;--card-hover:#171e2c;--line:#202838;--fg:#f0f3f8;--mut:#8d98aa;
+  --acc:#ff7a1a;--acc-glow:rgba(255,122,26,0.3);--cyan:#00f0ff;--cyan-glow:rgba(0,240,255,0.25);
+  --gold:#ffd700;--ok:#3fb950;--err:#f85149;--warn:#d29922;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 "Inter",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--cyan);text-decoration:none;transition:color .15s ease}
+a:hover{color:#fff}
+h1,h2,h3,.brand{font-family:"Outfit","Inter",sans-serif;letter-spacing:-.4px}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:18px;padding:14px 28px;border-bottom:1px solid var(--line);background:rgba(11,14,20,0.95);backdrop-filter:blur(12px);position:sticky;top:0;z-index:100}
+.brand{font-weight:900;font-size:18px;letter-spacing:-.6px;display:flex;align-items:center;gap:10px}
+.brand i{display:inline-block;width:12px;height:12px;border-radius:50%;background:linear-gradient(135deg,var(--acc),var(--cyan));box-shadow:0 0 10px var(--cyan-glow)}
+nav{display:flex;gap:6px;flex:1;flex-wrap:wrap;align-items:center}
+nav a{color:var(--mut);padding:8px 14px;border-radius:10px;font-weight:600;font-size:14px;transition:all .15s ease;display:inline-flex;align-items:center;gap:6px}
+nav a:hover{color:var(--fg);background:rgba(255,255,255,0.05)}
+nav a.on{color:#fff;background:var(--card);border:1px solid var(--line);box-shadow:0 2px 8px rgba(0,0,0,0.3)}
+main{max-width:1120px;margin:0 auto;padding:32px 24px 80px}
+h1{font-size:28px;margin:0 0 4px;font-weight:800}h2{font-size:18px;margin:28px 0 12px;font-weight:700}.sub{color:var(--mut);margin:0 0 24px;font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;transition:border-color .15s ease}
+.card:hover{border-color:rgba(0,240,255,0.2)}
+.grid{display:grid;gap:18px}.post{display:grid;grid-template-columns:220px 1fr;gap:22px}
+@media(max-width:768px){.post{grid-template-columns:1fr}}
+.post img,.post video{width:100%;border-radius:12px;border:1px solid var(--line);display:block}
+label{display:block;color:var(--mut);font-size:13px;margin:12px 0 6px;font-weight:500}
+input,select,textarea{width:100%;background:#090c12;color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px 13px;font:inherit;transition:border-color .15s ease}
+input:focus,select:focus,textarea:focus{border-color:var(--cyan);outline:none;box-shadow:0 0 0 3px rgba(0,240,255,0.12)}
+textarea{min-height:90px;resize:vertical}textarea.big{min-height:360px;font:13px/1.5 ui-monospace,Consolas,monospace}
+input[type=checkbox]{width:auto;cursor:pointer}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
+button,.btn{background:var(--acc);color:#111;border:0;border-radius:10px;padding:9px 16px;font-weight:700;cursor:pointer;font-size:14px;display:inline-flex;align-items:center;gap:6px;transition:all .15s ease}
+button:hover,.btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
+button.sec,.btn.sec{background:transparent;color:var(--fg);border:1px solid var(--line)}
+button.sec:hover,.btn.sec:hover{background:rgba(255,255,255,0.06);border-color:var(--mut)}
+button.bad,.btn.bad{background:transparent;color:var(--err);border:1px solid rgba(248,81,73,0.3)}
+button.bad:hover,.btn.bad:hover{background:rgba(248,81,73,0.12);border-color:var(--err)}
+button.cyan,.btn.cyan{background:var(--cyan);color:#0a0d14}
+.acts{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.acts form{margin:0}
+.badge{font-size:12px;padding:3px 11px;border-radius:99px;border:1px solid var(--line);color:var(--mut);font-weight:600;display:inline-flex;align-items:center;gap:4px}
+.badge.aguardando_aprovacao{color:var(--warn);border-color:var(--warn);background:rgba(210,153,34,0.1)}
+.badge.publicado{color:var(--ok);border-color:var(--ok);background:rgba(63,185,80,0.1)}
+.badge.rascunho{color:var(--mut)}.badge.agendado{color:var(--cyan);border-color:var(--cyan);background:rgba(0,240,255,0.1)}
+.badge.falhou{color:var(--err);border-color:var(--err);background:rgba(248,81,73,0.1)}
+.badge.publicando,.badge.extraido,.badge.capturado{color:var(--acc);border-color:var(--acc);background:rgba(255,122,26,0.1)}
+.flash{padding:12px 18px;border-radius:12px;margin-bottom:16px;border:1px solid var(--line);background:var(--card);font-size:14px}
+.flash.erro{border-color:var(--err);color:var(--err);background:rgba(248,81,73,0.08)}
+.flash.aviso{border-color:var(--warn);color:var(--warn);background:rgba(210,153,34,0.08)}
+.flash.ok{border-color:var(--ok);color:var(--ok);background:rgba(63,185,80,0.08)}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mut);font-weight:600;font-size:13px}
+.mut{color:var(--mut)}.err{color:var(--err)}small{color:var(--mut)}
+.sw{display:flex;gap:10px;align-items:center}.sw select{width:auto;padding:7px 12px;font-size:13px}
+</style></head><body>
+{% if request.session.get('ok') %}
+<header>
+  <span class="brand"><i></i>ic-ap</span>
+  <nav>
+    <a href="/" class="{{ 'on' if request.url.path=='/' }}">📱 Fila & Conteúdo</a>
+    <a href="/pauta" class="{{ 'on' if request.url.path.startswith('/pauta') }}">📰 Pauta</a>
+    <a href="/agenda" class="{{ 'on' if request.url.path.startswith('/agenda') }}">🗓️ Agenda</a>
+    <a href="/historico" class="{{ 'on' if request.url.path.startswith('/historico') }}">🕘 Histórico</a>
+    <a href="/feeds" class="{{ 'on' if request.url.path.startswith('/feeds') }}">📡 Feeds</a>
+    <a href="/musicas" class="{{ 'on' if request.url.path.startswith('/musicas') }}">🎵 Músicas</a>
+    <a href="/voz" class="{{ 'on' if request.url.path.startswith('/voz') }}">🎙️ Voz</a>
+    <a href="/escritorio" class="{{ 'on' if request.url.path.startswith('/escritorio') }}">🏢 Escritório dos Agentes</a>
+    <a href="/agentes" class="{{ 'on' if request.url.path.startswith('/agentes') }}">🤖 Habilidades & Skills</a>
+    <a href="/llm" class="{{ 'on' if request.url.path.startswith('/llm') }}">🧠 IA & Modelos (LLM)</a>
+    <a href="/perfis" class="{{ 'on' if request.url.path.startswith('/perfis') }}">👤 Perfis & Marca</a>
+    <a href="/conexoes" class="{{ 'on' if request.url.path.startswith('/conexoes') }}">⚡ Conexões</a>
+  </nav>
+  <form method="post" action="/perfil-atual" class="sw">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.url.path }}">
+    <span class="mut" style="font-size:13px">Perfil:</span>
+    <select name="perfil_id" onchange="this.form.submit()">
+      {% for p in perfis %}<option value="{{ p.id }}" {{ 'selected' if p.id==perfil_id }}>{{ p.nome }}{{ '' if p.ativo else ' (desligado)' }}</option>{% endfor %}
+    </select>
+  </form>
+  <form method="post" action="/logout"><button class="sec" type="submit" style="padding:6px 12px;font-size:13px">Sair</button></form>
+</header>
+{% endif %}
+<main>
+  {% for tipo, msg in flashes %}<div class="flash {{ tipo }}">{{ msg }}</div>{% endfor %}
+  {% block body %}{% endblock %}
+</main></body></html>

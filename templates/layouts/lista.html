@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
+
+  :root {
+    --bg: #05070b;
+    --text-primary: #ffffff;
+    --text-secondary: #e2e8f0;
+    --text-muted: #94a3b8;
+    --accent: {{ paleta.destaque|default('#00ff88') }};
+    --card-h: {{ altura|default(1920 if formato == 'story' else 1350) }}px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 1080px;
+    height: var(--card-h);
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  .canvas {
+    width: 1080px;
+    height: var(--card-h);
+    position: relative;
+    background: var(--bg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+
+  /* Fotografia Contextual em Alta Definição */
+  .photo-layer {
+    position: absolute;
+    inset: 0;
+    width: 1080px;
+    height: var(--card-h);
+    z-index: 1;
+    overflow: hidden;
+  }
+
+  .photo-layer img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 22%;
+    transform: scale(1.04);
+    filter: contrast(1.06) saturate(1.08);
+  }
+
+  /* Vinheta Cinematográfica Progressiva (Deixa a foto limpa na metade superior e dá leitura perfeita na metade inferior) */
+  .cinematic-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: linear-gradient(
+      180deg,
+      rgba(5, 7, 11, 0.10) 0%,
+      rgba(5, 7, 11, 0.05) 28%,
+      rgba(5, 7, 11, 0.55) 48%,
+      rgba(5, 7, 11, 0.92) 66%,
+      rgba(5, 7, 11, 0.98) 100%
+    );
+  }
+
+  /* Área Editorial com a Legenda Sobreposta */
+  .editorial-overlay {
+    position: relative;
+    z-index: 5;
+    width: 100%;
+    padding: {% if formato == 'story' %}0 72px 230px 72px{% else %}0 68px 76px 68px{% endif %};
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  /* Assinatura Minimalista do Autor (Sem rótulos "Story" ou SVGs fixos) */
+  .author-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    align-self: flex-start;
+    background: rgba(10, 14, 23, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    backdrop-filter: blur(16px);
+    padding: 10px 20px 10px 12px;
+    border-radius: 999px;
+  }
+
+  .author-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #05070b;
+    font-weight: 900;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .author-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .author-name {
+    font-size: 19px;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: -0.2px;
+  }
+
+  .author-sep {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  .author-handle {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  /* Manchete Principal */
+  .headline {
+    font-size: {% if manchete|length > 65 %}44px{% elif manchete|length > 42 %}50px{% else %}56px{% endif %};
+    font-weight: 900;
+    line-height: 1.12;
+    letter-spacing: -1.4px;
+    color: #ffffff;
+    text-shadow: 0 8px 28px rgba(0, 0, 0, 0.75);
+  }
+
+  .headline .hl {
+    color: var(--accent);
+  }
+
+  /* Bloco da Legenda Sobreposta (Representa o contexto real do post na imagem) */
+  .caption-card {
+    background: rgba(12, 17, 28, 0.78);
+    border-left: 5px solid var(--accent);
+    border-top: 1px solid rgba(255, 255, 255, 0.10);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0 22px 22px 0;
+    padding: 28px 32px;
+    backdrop-filter: blur(20px);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .caption-text {
+    font-size: {% if formato == 'story' %}27px{% else %}25px{% endif %};
+    line-height: 1.48;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+
+  .caption-text p + p {
+    margin-top: 14px;
+  }
+
+  /* Pontos Práticos da Legenda (se houverem) */
+  .points-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 4px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.10);
+  }
+
+  .point-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    font-size: 22px;
+    line-height: 1.38;
+    font-weight: 600;
+    color: #ffffff;
+  }
+
+  .point-dot {
+    color: var(--accent);
+    font-weight: 900;
+    font-size: 22px;
+    line-height: 1.35;
+    flex-shrink: 0;
+  }
+
+  /* Rodapé Discreto */
+  .footer-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 6px;
+  }
+
+  .cta-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--accent);
+    letter-spacing: 0.2px;
+  }
+
+  .swipe-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .swipe-dots span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.25);
+  }
+
+  .swipe-dots span.active {
+    width: 24px;
+    border-radius: 99px;
+    background: var(--accent);
+  }
+</style>
+</head>
+<body>
+<div class="canvas">
+  {% if imagem_fundo_uri %}
+  <div class="photo-layer">
+    <img src="{{ imagem_fundo_uri }}" alt="">
+  </div>
+  {% endif %}
+  <div class="cinematic-scrim"></div>
+
+  <div class="editorial-overlay">
+    <div class="author-row">
+      <div class="author-avatar">{{ (nome or handle or 'E')[0]|upper }}</div>
+      <div class="author-meta">
+        <span class="author-name">{{ nome }}</span>
+        <span class="author-sep"></span>
+        <span class="author-handle">@{{ handle|replace('@','') }}</span>
+      </div>
+    </div>
+
+    <h1 class="headline">{{ manchete_html|safe }}</h1>
+
+    <div class="caption-card">
+      <div class="caption-text">
+        {% if paragrafos and paragrafos|length > 0 %}
+          {% for p in paragrafos[:2] %}
+          <p>{{ p }}</p>
+          {% endfor %}
+        {% elif corpo %}
+          <p>{{ corpo }}</p>
+        {% endif %}
+      </div>
+
+      {% if itens and itens|length > 0 %}
+      <div class="points-list">
+        {% for it in itens[:3] %}
+        <div class="point-item">
+          <span class="point-dot">▸</span>
+          <span>{% if it.titulo %}<strong>{{ it.titulo }}:</strong> {% endif %}{{ it.texto }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    {% if cta_texto %}
+    <div class="footer-bar">
+      <div class="cta-line">
+        <span>{{ cta_texto }}</span>
+        <span>→</span>
+      </div>
+      <div class="swipe-dots">
+        <span class="active"></span>
+        <span></span>
+        <span></span>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+</body>
+</html>

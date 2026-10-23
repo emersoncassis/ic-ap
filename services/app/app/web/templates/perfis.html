@@ -1,0 +1,40 @@
+{% extends "base.html" %}{% block title %}Perfis · ic-ap{% endblock %}
+{% block body %}
+<h1>Perfis</h1><p class="sub">Cada perfil tem conta, token, contexto, horários e Telegram próprios.</p>
+<div class="card"><table>
+  <tr><th>Nome</th><th>Handle</th><th>Estado</th><th>Horários</th><th>Feeds do Perfil</th><th>Ações</th></tr>
+  {% for p in lista %}<tr>
+    <td><b>{{ p.nome }}</b></td>
+    <td>@{{ p.handle if p.handle else '-' }}</td>
+    <td><span class="badge {{ 'publicado' if p.ativo else 'rascunho' }}">{{ 'ligado' if p.ativo else 'desligado' }}</span></td>
+    <td><small>{{ p.horarios }}</small></td>
+    <td>
+      {% if p.total_feeds and p.total_feeds > 0 %}
+        <span class="badge publicado" style="font-size:11px">📰 {{ p.total_feeds }} feed(s) ativo(s)</span>
+      {% else %}
+        <span class="badge aviso" style="font-size:11px">⚠️ Global (sem feeds próprios)</span>
+      {% endif %}
+    </td>
+    <td>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <a href="/perfis/{{ p.id }}">editar</a> · 
+        <a href="/perfis/{{ p.id }}#feeds" style="color:var(--acc);font-weight:600">gerenciar feeds</a> · 
+        <form method="post" action="/perfis/{{ p.id }}/excluir" style="display:inline;margin:0" onsubmit="return confirm('Tem certeza que deseja excluir o perfil \'{{ p.nome }}\' e todos os seus dados (feeds, posts e configurações)? Esta ação não pode ser desfeita.');">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" style="background:none;border:none;color:var(--err);cursor:pointer;padding:0;font-size:inherit;text-decoration:underline">excluir</button>
+        </form>
+      </div>
+    </td>
+  </tr>{% else %}<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--mut)">Nenhum perfil cadastrado. Crie o primeiro perfil abaixo ou com o Wizard.</td></tr>{% endfor %}
+</table></div>
+<div style="display:flex;justify-content:space-between;align-items:center;margin:24px 0 10px;flex-wrap:wrap;gap:10px">
+  <h2 style="margin:0">Novo perfil</h2>
+  <a href="/wizard" class="btn" style="background:var(--acc);color:#fff;font-weight:600;padding:6px 14px;border-radius:6px;text-decoration:none">
+    🧙 Criar com Assistente Inteligente (Wizard)
+  </a>
+</div>
+<form method="post" action="/perfis" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="row"><div><label>Nome</label><input name="nome" placeholder="Nome do perfil" required></div><div><label>Handle (@)</label><input name="handle" placeholder="usuario"></div></div>
+  <div class="acts"><button type="submit">Criar Manualmente</button></div>
+</form>
+{% endblock %}

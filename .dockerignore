@@ -1,0 +1,8 @@
+.git
+data
+old
+**/__pycache__
+**/.pytest_cache
+services/app/tests
+docs
+*.zip

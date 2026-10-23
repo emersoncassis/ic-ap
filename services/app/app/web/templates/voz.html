@@ -1,0 +1,231 @@
+{% extends "base.html" %}{% block title %}Voz · ic-ap{% endblock %}
+{% block body %}
+<h1>Voz</h1>
+<p class="sub">Grave (ou envie) uma amostra, o app limpa o áudio e o servidor de voz da sua GPU passa a falar com essa voz nas narrações. Tudo roda no seu computador.</p>
+
+<h2>Servidor de voz</h2>
+<div class="card">
+  {% if not servidor.configurado %}
+    <p><b>Nenhum servidor configurado.</b> Para usar um servidor local (GPU) que vem com o ic-ap:</p>
+    <ol class="mut">
+      <li>No terminal, na pasta do projeto: <code>docker compose --profile gpu up -d --build</code> (a primeira vez baixa os modelos, vários GB).</li>
+      <li>Clique em “Usar o servidor local” abaixo.</li>
+    </ol>
+  {% elif servidor.ok %}
+    <p><b style="color:var(--ok)">● Servidor respondendo</b> em <code>{{ servidor.url }}</code>
+    {% if servidor.generico %}<span class="mut">(servidor genérico, sem informações de GPU)</span>
+    {% else %}<br><span class="mut">GPU: {{ servidor.gpu or 'não detectada (rodando na CPU, vai ficar lento)' }} · transcrição: {{ servidor.whisper or '-' }} · voz: {{ servidor.tts or '-' }}{% if servidor.clonagem %} · clonagem ativa{% endif %}</span>{% endif %}</p>
+  {% else %}
+    <p><b class="err">● Sem resposta</b> de <code>{{ servidor.url }}</code>. Se for o servidor local, confira com <code>docker compose --profile gpu ps</code> e <code>docker compose logs voz</code>. Na primeira subida ele demora para baixar os modelos.</p>
+  {% endif %}
+  {% if servidor.ok and not servidor.generico %}
+  <div class="acts" style="align-items:center">
+    <form method="post" action="/voz/servidor/descarregar"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" {% if not servidor.carregado %}class="sec" disabled{% else %}class="sec"{% endif %}>⏏ Liberar a placa (descarregar modelos)</button></form>
+    <span class="mut">{% if servidor.carregado %}Modelos carregados na memória.{% else %}Modelos fora da memória da placa; carregam sozinhos no próximo uso.{% endif %} Descarregam sozinhos após {{ servidor.ociosidade_min|int }} min parado.</span>
+  </div>
+  {% endif %}
+  <div class="acts">
+    <form method="post" action="/voz/servidor/usar"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="motor" value="chatterbox">
+      <button class="sec" type="submit">Usar Chatterbox ({{ url_local }})</button></form>
+    <form method="post" action="/voz/servidor/usar"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="motor" value="qwen">
+      <button class="sec" type="submit">Usar Qwen3-TTS ({{ url_qwen }})</button></form>
+  </div>
+  <small>Dois motores de clonagem para comparar. Chatterbox: <code>docker compose --profile gpu up -d</code>. Qwen3-TTS: <code>docker compose --profile qwen up -d --build</code>. Rode um de cada vez (<code>docker compose stop voz</code> ou <code>stop voz-qwen</code>), porque os dois juntos não cabem na memória da placa. O botão só preenche Transcrição e Voz em Conexões.</small>
+</div>
+
+<h2>Nova voz ou nova gravação</h2>
+<form method="post" action="/voz/adicionar" enctype="multipart/form-data" class="card" id="fvoz">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Nome da voz</label>
+  <input name="nome" list="existentes" maxlength="60" placeholder="ex.: Emerson" required>
+  <datalist id="existentes">{% for v in vozes %}<option value="{{ v.nome }}">{% endfor %}</datalist>
+  <small>Se o nome já existir, a gravação é somada às anteriores.</small>
+
+  <label>De quem é a voz</label>
+  <div class="sw"><label style="display:flex;gap:6px;align-items:center;margin:0"><input type="radio" name="dono" value="propria" checked style="width:auto"> Minha</label>
+  <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="radio" name="dono" value="outra" style="width:auto"> De outra pessoa</label></div>
+  <input name="autor" id="autor" placeholder="Nome da pessoa" style="display:none;margin-top:8px">
+  <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px"><input type="checkbox" name="consentimento" value="1" style="width:auto;margin-top:3px">
+    <span>Declaro que a voz é minha ou que a pessoa autorizou, de forma expressa, usar a voz dela. Não vou usar a voz para enganar ninguém nem para dizer o que ela não diria.</span></label>
+
+  <h2 style="margin-top:18px">1. Grave pelo navegador</h2>
+  <p class="mut" style="margin:4px 0 8px">Ambiente silencioso, microfone a um palmo da boca, ritmo natural. Leia em voz alta (o app usa os primeiros 10 a 20 s). Fale como vai narrar: tom natural, nem sussurrando nem gritando:</p>
+  <blockquote style="margin:0 0 10px;padding:10px 14px;border-left:3px solid var(--acc);background:var(--bg)">{{ texto_leitura }}</blockquote>
+  <div class="acts" style="align-items:center">
+    <button type="button" id="rec">● Gravar</button>
+    <button type="button" id="parar" class="sec" disabled>■ Parar</button>
+    <span id="tempo" class="mut">0:00</span>
+    <div style="flex:1;min-width:120px;height:8px;background:var(--line);border-radius:4px;overflow:hidden"><div id="nivel" style="height:100%;width:0;background:var(--ok)"></div></div>
+  </div>
+  <audio id="previa" controls style="width:100%;margin-top:10px;display:none"></audio>
+  <small id="recmsg"></small>
+
+  <h2 style="margin-top:18px">2. Ou envie um arquivo</h2>
+  <input type="file" name="arquivo" id="arquivo" accept="audio/*,video/mp4,.wav,.mp3,.m4a,.ogg,.webm,.aac,.flac" multiple>
+  <small>Até 40 MB. Pode ser um áudio de WhatsApp, uma live ou uma entrevista sua, desde que só uma pessoa fale e sem música de fundo.</small>
+
+  <div class="acts"><button type="submit">Processar amostra</button></div>
+  <small>O app corta o silêncio das pontas e ajusta o volume, sem mexer no som da sua voz (limpeza leve). Fica até 20 s de referência.</small>
+</form>
+
+<h2>Vozes ({{ vozes|length }})</h2>
+{% for v in vozes %}
+<div class="card" style="margin-bottom:14px">
+  <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+    <div><b>{{ v.nome }}</b> {% if v.padrao %}<span style="color:var(--ok)">★ padrão</span>{% endif %}
+      <span class="mut">· {{ 'sua voz' if v.dono == 'propria' else 'voz de ' ~ v.autor }} · {{ v.dur_ref }} s de referência · {{ v.takes|length }} gravação(ões) · {{ v.criado }}</span></div>
+    <div class="acts" style="margin:0">
+      {% if v.pronta and not v.padrao %}<form method="post" action="/voz/{{ v.slug }}/padrao"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sec" type="submit">Usar como padrão</button></form>{% endif %}
+      <form method="post" action="/voz/{{ v.slug }}/excluir" onsubmit="return confirm('Apagar a voz {{ v.nome }} e todas as gravações?')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="bad" type="submit">Apagar</button></form>
+    </div>
+  </div>
+  {% for a in v.avisos %}<p style="color:var(--warn);margin:8px 0 0">⚠ {{ a }}</p>{% endfor %}
+  {% if v.pronta %}<p class="mut" style="margin:10px 0 4px">Amostra de referência (limpeza {{ v.limpeza or 'leve' }}):</p><audio controls preload="none" src="/voz/{{ v.slug }}/amostra.wav" style="width:100%"></audio>
+  <div class="acts" style="margin-top:8px">
+    {% if (v.limpeza or 'leve') == 'leve' %}
+    <form method="post" action="/voz/{{ v.slug }}/limpeza"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="forte"><button class="sec" type="submit" title="Reduz chiado e ruído de fundo. Só use se a gravação tiver barulho: pode deixar o clone mais artificial.">Gravação com ruído? Limpeza forte</button></form>
+    {% else %}
+    <form method="post" action="/voz/{{ v.slug }}/limpeza"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="modo" value="leve"><button class="sec" type="submit">Voltar para a limpeza leve (mais fiel)</button></form>
+    {% endif %}
+  </div>
+  <form method="post" action="/voz/{{ v.slug }}/texto" style="margin-top:10px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Texto dito na amostra {% if not v.texto_ref %}<span class="mut">(sem Whisper ligado: digite o que você leu)</span>{% endif %}</label>
+    <textarea name="texto" rows="2" maxlength="2000" placeholder="O que está sendo dito na amostra">{{ v.texto_ref }}</textarea>
+    <div class="acts"><button class="sec" type="submit">Salvar texto</button></div>
+    <small>O Qwen3-TTS usa esse texto para clonar melhor. Corrija se o Whisper errou alguma palavra.</small>
+  </form>
+  {% endif %}
+  <table style="margin-top:8px">{% for t in v.takes %}<tr><td>Gravação {{ t.n }}</td><td class="mut">{{ t.dur }} s · pico {{ t.pico_db }} dB · média {{ t.media_db }} dB</td>
+    <td style="text-align:right"><form method="post" action="/voz/{{ v.slug }}/take/{{ t.n }}/remover" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="bad" type="submit">Remover</button></form></td></tr>{% endfor %}</table>
+  {% if v.pronta %}
+  <div class="testar" data-slug="{{ v.slug }}" style="margin-top:12px">
+    <label>Testar a voz</label>
+    <textarea rows="2" maxlength="400" placeholder="Digite uma frase (vazio = frase padrão)"></textarea>
+    <details style="margin-top:8px"><summary class="mut" style="cursor:pointer">Ajustes finos (Chatterbox)</summary>
+      {% set aj = v.ajustes or {} %}
+      <div style="display:grid;gap:8px;margin-top:8px">
+        <label style="margin:0">Semelhança com a amostra: <b class="vcfg">{{ aj.cfg_weight if aj.cfg_weight is defined else 0.3 }}</b> <small>(menor = mais parecido com você, maior = mais ritmo próprio)</small>
+          <input type="range" class="rcfg" min="0" max="1" step="0.05" value="{{ aj.cfg_weight if aj.cfg_weight is defined else 0.3 }}"></label>
+        <label style="margin:0">Expressividade: <b class="vexag">{{ aj.exaggeration if aj.exaggeration is defined else 0.5 }}</b> <small>(0 = neutro, 1+ = dramático)</small>
+          <input type="range" class="rexag" min="0" max="1.5" step="0.05" value="{{ aj.exaggeration if aj.exaggeration is defined else 0.5 }}"></label>
+        <label style="margin:0">Variação: <b class="vtemp">{{ aj.temperature if aj.temperature is defined else 0.75 }}</b> <small>(menor = mais estável, maior = mais variado)</small>
+          <input type="range" class="rtemp" min="0.3" max="1.2" step="0.05" value="{{ aj.temperature if aj.temperature is defined else 0.75 }}"></label>
+      </div>
+      <div class="acts">
+        <button type="button" class="salvaraj sec">Salvar como padrão desta voz</button>
+        <button type="button" class="resetaj sec">Voltar ao padrão</button>
+      </div>
+    </details>
+    <div class="acts"><button type="button" class="ouvir">▶ Gerar e ouvir</button><button type="button" class="tres sec">▶▶▶ Gerar 3 variações</button><span class="st mut"></span></div>
+    <small>Cada geração sai um pouco diferente. Gere 3 e fique com a melhor.</small>
+    <div class="saidas"></div>
+    <audio controls style="width:100%;margin-top:8px;display:none"></audio>
+  </div>
+  {% endif %}
+</div>
+{% else %}<div class="card mut">Nenhuma voz ainda. Grave ou envie uma amostra acima.</div>{% endfor %}
+
+<script>
+(() => {
+  const csrf = {{ csrf|tojson }};
+  const f = document.getElementById('fvoz');
+  const autor = document.getElementById('autor');
+  f.querySelectorAll('input[name=dono]').forEach(r => r.addEventListener('change', () => {
+    const outra = f.querySelector('input[name=dono]:checked').value === 'outra';
+    autor.style.display = outra ? '' : 'none'; autor.required = outra;
+  }));
+
+  // ---- gravação ----
+  const rec = document.getElementById('rec'), parar = document.getElementById('parar');
+  const tempo = document.getElementById('tempo'), nivel = document.getElementById('nivel');
+  const previa = document.getElementById('previa'), msg = document.getElementById('recmsg'), arq = document.getElementById('arquivo');
+  let mr = null, trechos = [], t0 = 0, tick = null, ctx = null, raf = null, stream = null;
+  const mm = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  function fim() {
+    clearInterval(tick); cancelAnimationFrame(raf); nivel.style.width = '0';
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (ctx) ctx.close();
+    rec.disabled = false; parar.disabled = true;
+  }
+  rec.addEventListener('click', async () => {
+    msg.textContent = '';
+    if (!navigator.mediaDevices || !window.MediaRecorder) { msg.textContent = 'Este navegador não grava áudio. Envie um arquivo.'; return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false}});
+    } catch (e) { msg.textContent = 'Sem acesso ao microfone. Libere a permissão no navegador (cadeado ao lado do endereço).'; return; }
+    const tipos = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+    const tipo = tipos.find(t => MediaRecorder.isTypeSupported(t)) || '';
+    mr = new MediaRecorder(stream, tipo ? {mimeType: tipo} : {});
+    trechos = [];
+    mr.ondataavailable = e => { if (e.data.size) trechos.push(e.data); };
+    mr.onstop = () => {
+      const mime = mr.mimeType || 'audio/webm';
+      const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
+      const blob = new Blob(trechos, {type: mime});
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'gravacao.' + ext, {type: mime}));
+      arq.files = dt.files;
+      previa.src = URL.createObjectURL(blob); previa.style.display = '';
+      msg.textContent = 'Gravação pronta. Ouça acima e clique em “Processar amostra” (ou grave de novo).';
+      fim();
+    };
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const an = ctx.createAnalyser(); an.fftSize = 512;
+    ctx.createMediaStreamSource(stream).connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    (function medir() {
+      an.getByteTimeDomainData(buf);
+      let m = 0; for (const v of buf) m = Math.max(m, Math.abs(v - 128));
+      nivel.style.width = Math.min(100, m / 128 * 140) + '%';
+      nivel.style.background = m > 120 ? 'var(--err)' : 'var(--ok)';
+      raf = requestAnimationFrame(medir);
+    })();
+    mr.start(); t0 = Date.now(); rec.disabled = true; parar.disabled = false; previa.style.display = 'none';
+    tick = setInterval(() => {
+      const s = (Date.now() - t0) / 1000; tempo.textContent = mm(s);
+      if (s >= 120) parar.click();
+    }, 250);
+  });
+  parar.addEventListener('click', () => { if (mr && mr.state !== 'inactive') mr.stop(); });
+
+  // ---- teste de voz ----
+  document.querySelectorAll('.testar').forEach(box => {
+    const btn = box.querySelector('.ouvir'), st = box.querySelector('.st'), au = box.querySelector('audio'), tx = box.querySelector('textarea');
+    const rs = {cfg: box.querySelector('.rcfg'), exag: box.querySelector('.rexag'), temp: box.querySelector('.rtemp')};
+    const vs = {cfg: box.querySelector('.vcfg'), exag: box.querySelector('.vexag'), temp: box.querySelector('.vtemp')};
+    Object.keys(rs).forEach(k => rs[k].addEventListener('input', () => { vs[k].textContent = rs[k].value; }));
+    const vals = () => Object.keys(rs).map(k => [k, rs[k].value]);
+    const enviarAj = acao => {
+      const f2 = document.createElement('form'); f2.method = 'post'; f2.action = '/voz/' + box.dataset.slug + '/ajustes';
+      [['csrf', csrf], ['acao', acao], ...vals()].forEach(([k, v]) => { const i = document.createElement('input'); i.type = 'hidden'; i.name = k; i.value = v; f2.appendChild(i); });
+      document.body.appendChild(f2); f2.submit();
+    };
+    box.querySelector('.salvaraj').addEventListener('click', () => enviarAj('salvar'));
+    box.querySelector('.resetaj').addEventListener('click', () => enviarAj('padrao'));
+    const saidas = box.querySelector('.saidas'), tres = box.querySelector('.tres');
+    async function pedir() {
+      const fd = new FormData(); fd.append('csrf', csrf); fd.append('texto', tx.value); vals().forEach(([k, v]) => fd.append(k, v));
+      const r = await fetch('/voz/' + box.dataset.slug + '/testar', {method: 'POST', body: fd});
+      if (!r.ok) { let e = 'erro ' + r.status; try { e = (await r.json()).erro || e; } catch (_) {} throw new Error(e); }
+      return URL.createObjectURL(await r.blob());
+    }
+    async function gerar(n) {
+      btn.disabled = tres.disabled = true; au.style.display = 'none'; saidas.innerHTML = '';
+      try {
+        for (let i = 1; i <= n; i++) {
+          st.textContent = 'gerando ' + i + ' de ' + n + '… (a primeira vez carrega o modelo e demora)';
+          const url = await pedir();
+          if (n === 1) { au.src = url; au.style.display = ''; au.play(); }
+          else { const d = document.createElement('div'); d.style.marginTop = '8px'; d.innerHTML = '<small>Variação ' + i + '</small><br>'; const a = document.createElement('audio'); a.controls = true; a.style.width = '100%'; a.src = url; d.appendChild(a); saidas.appendChild(d); }
+        }
+        st.textContent = 'pronto';
+      } catch (e) { st.textContent = e.message || 'falha de rede'; }
+      btn.disabled = tres.disabled = false;
+    }
+    btn.addEventListener('click', () => gerar(1));
+    tres.addEventListener('click', () => gerar(3));
+  });
+})();
+</script>
+{% endblock %}

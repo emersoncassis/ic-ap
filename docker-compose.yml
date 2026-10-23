@@ -1,0 +1,86 @@
+# Um único serviço. Toda a configuração (senha, LLM, túnel, Telegram, Meta) é feita no painel web.
+# O LLM roda fora daqui (LM Studio, Ollama, Jan, API...). Dentro do container, "localhost" não
+# é a sua máquina: use host.docker.internal no campo de endereço do LLM.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: services/app/Dockerfile
+    restart: unless-stopped
+    environment:
+      - TZ=America/Sao_Paulo
+      - PYTHONUNBUFFERED=1
+    ports: ["127.0.0.1:8000:8000"]   # painel: só local
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - data:/data                    # banco, chave (secret.key), cards e músicas: volume do Docker, sem compartilhar pasta do Windows
+
+  # Servidor de voz local (GPU NVIDIA): transcrição + voz com clonagem. Só sobe com o perfil "gpu":
+  #   docker compose --profile gpu up -d --build
+  # O app o encontra em http://voz:8001 (botão "Usar o servidor local" na aba Voz).
+  voz:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/voz/Dockerfile
+    restart: unless-stopped
+    environment:
+      - TZ=America/Sao_Paulo
+    volumes:
+      - data:/data:ro                 # lê as amostras criadas na aba Voz
+      - modelos:/modelos              # cache dos modelos (baixados uma vez)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Segundo motor de clonagem, para comparar: Qwen3-TTS (Apache 2.0, português). Rode um motor de cada vez:
+  #   docker compose stop voz && docker compose --profile qwen up -d --build
+  voz-qwen:
+    profiles: ["qwen"]
+    build:
+      context: .
+      dockerfile: services/voz/Dockerfile.qwen
+    restart: unless-stopped
+    environment:
+      - TZ=America/Sao_Paulo
+    volumes:
+      - data:/data:ro
+      - modelos:/modelos
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Servidor de LLM local embutido (Ollama): baixa e roda modelos leves em CPU ou GPU
+  llm:
+    image: ollama/ollama:latest
+    container_name: icap-llm
+    restart: unless-stopped
+    ports: ["127.0.0.1:11434:11434"]
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_MAX_LOADED_MODELS=4
+      - OLLAMA_NUM_PARALLEL=4
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  data:
+  modelos:
+  ollama_models:
+
+

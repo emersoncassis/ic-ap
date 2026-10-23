@@ -1,0 +1,16 @@
+data/
+.env
+*.log
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+# bancos/estados gerados por scripts de verificação e cópias temporárias de análise
+services/app/test_data/
+scratch/*.tgz
+.venv/
+bin/
+# relatórios gerados por scripts\qualidade_llm.py
+scratch/qualidade_llm_*.md
+# legado e repositórios aninhados (agentroom, vectorcraft_rust) e zips: fora do primeiro commit até o Emerson decidir (REVISAO seção 4)
+old/

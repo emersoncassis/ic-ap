@@ -1,0 +1,522 @@
+{% extends "base.html" %}{% block title %}Inteligência Artificial & Modelos · ic-ap{% endblock %}
+{% block body %}
+<h1>Inteligência Artificial & Modelos</h1>
+<p class="sub">Gerencie servidores locais (GPU NVIDIA / NPU Intel Core Ultra), modelos em nuvem e distribua IAs dedicadas para cada módulo funcional do sistema.</p>
+
+<!-- 1. ACELERADORES DE HARDWARE ATIVOS -->
+<div class="card" style="background:#0f1520;border:1px solid #1f2a3a;margin-bottom:20px;padding:16px">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:22px">⚡</span>
+      <b style="font-size:15px;color:var(--fg)">Aceleradores de Hardware Ativos no Host</b>
+    </div>
+    <span class="badge publicado" style="font-size:12px">Multi-Modelo Concorrente Ativo (até 4 simultâneos)</span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
+    <div style="background:#151c28;border:1px solid var(--line);border-radius:6px;padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--mut)">NPU (Neural Processing Unit)</span>
+        {% if roteamento.hardware.npu_disponivel %}
+          <span class="badge publicado" style="font-size:10px">🟢 Ativa</span>
+        {% else %}
+          <span class="badge mut" style="font-size:10px">Em espera</span>
+        {% endif %}
+      </div>
+      <b style="display:block;margin-top:6px;font-size:13px;color:var(--fg)">{{ roteamento.hardware.npu_nome }}</b>
+      <small class="mut">Aceleração com eficiência energética extrema (OpenVINO / DirectML).</small>
+    </div>
+
+    <div style="background:#151c28;border:1px solid var(--line);border-radius:6px;padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--mut)">GPU Dedicada</span>
+        {% if roteamento.hardware.gpu_disponivel %}
+          <span class="badge publicado" style="font-size:10px">🟢 CUDA Ativa</span>
+        {% else %}
+          <span class="badge aviso" style="font-size:10px">Modo CPU</span>
+        {% endif %}
+      </div>
+      <b style="display:block;margin-top:6px;font-size:13px;color:var(--fg)">{{ roteamento.hardware.gpu_nome }}</b>
+      <small class="mut">Aceleração de modelos Ollama e clonagem de voz TTS em alta velocidade.</small>
+    </div>
+
+    <div style="background:#151c28;border:1px solid var(--line);border-radius:6px;padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--mut)">Processador (CPU)</span>
+        <span class="badge publicado" style="font-size:10px">Pronto</span>
+      </div>
+      <b style="display:block;margin-top:6px;font-size:13px;color:var(--fg)">{{ roteamento.hardware.cpu_nome }}</b>
+      <small class="mut">Processamento paralelo multi-thread no pipeline.</small>
+    </div>
+  </div>
+</div>
+
+<!-- 2. ORIENTADOR DE CUSTO ZERO & OTIMIZAÇÃO DE TOKENS -->
+<div class="card" style="background:#0c131d;border:1px solid #1f334d;border-left:4px solid var(--acc);margin-bottom:20px;padding:16px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
+    <div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">💡</span>
+        <b style="font-size:16px;color:var(--fg)">Orientador de IA: 100% Custo Zero & Economia de Tokens</b>
+      </div>
+      <p class="mut" style="margin:6px 0 10px;font-size:13px">
+        Aproveite ao máximo seus aceleradores dedicados (<b>{{ roteamento.hardware.gpu_nome }}</b> + <b>{{ roteamento.hardware.npu_nome }}</b>) e gateways gratuitos para operar sem gastar dinheiro com tokens.
+      </p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <form method="post" action="/llm/perfil-custo-zero" style="margin:0">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" style="background:var(--ok);color:#000;font-weight:700;padding:8px 14px;border:none" title="Aponta todos os módulos de texto para o Ollama local e ativa o Whisper embutido">
+          ⚡ Ativar Perfil 100% Custo Zero
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:12px">
+    <div style="background:#131b26;border:1px solid var(--line);border-radius:6px;padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b style="font-size:13px;color:var(--fg)">💻 Modelos de Texto Locais (Ollama)</b>
+        <span class="badge {{ 'publicado' if roteamento.orientador_local.tem_ollama else 'mut' }}" style="font-size:10px">
+          {{ 'Ativo / Configurado' if roteamento.orientador_local.tem_ollama else 'Disponível' }}
+        </span>
+      </div>
+      <p class="mut" style="font-size:12px;margin:6px 0 0">
+        Executa <b>Llama 3.2 1B</b> ou <b>Qwen 2.5</b> direto na sua RTX 5070 via Ollama. Respostas ultrarrápidas no Telegram e geração de conteúdo sem custo de tokens.
+      </p>
+    </div>
+
+    <div style="background:#131b26;border:1px solid var(--line);border-radius:6px;padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b style="font-size:13px;color:var(--fg)">🎙️ Transcrição & Voz Inteligente</b>
+        <span class="badge publicado" style="font-size:10px">Whisper Embutido</span>
+      </div>
+      <p class="mut" style="font-size:12px;margin:6px 0 0">
+        Legendas e transcrições rodam no Whisper local embutido (CPU/NPU) por padrão, economizando 100% dos tokens de áudio sem esquentar a GPU desnecessariamente.
+      </p>
+    </div>
+
+    <div style="background:#131b26;border:1px solid var(--line);border-radius:6px;padding:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b style="font-size:13px;color:var(--fg)">🌐 OpenRouter & Modelos Gratuitos</b>
+        <span class="badge {{ 'publicado' if roteamento.orientador_local.tem_openrouter else 'mut' }}" style="font-size:10px">
+          {{ 'Conectado' if roteamento.orientador_local.tem_openrouter else 'Configurar Chave' }}
+        </span>
+      </div>
+      <p class="mut" style="font-size:12px;margin:6px 0 8px">
+        Acesse modelos avançados de ponta e modelos 100% gratuitos (tag <code>:free</code> como Llama 3.3 70B e Nemotron) com uma única chave da OpenRouter.
+      </p>
+      {% if roteamento.orientador_local.tem_openrouter and openrouter_con %}
+        <a href="/llm?editar={{ openrouter_con.id }}" class="btn sec" style="padding:4px 8px;font-size:11px;display:inline-block">
+          ✓ OpenRouter Ativo ({{ openrouter_con.modelo }})
+        </a>
+      {% else %}
+        <a href="#openrouter-box" class="btn sec" style="padding:4px 8px;font-size:11px;display:inline-block">
+          ⚡ Configurar Chave da OpenRouter
+        </a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- 3. ROTEAMENTO DE IA POR MÓDULO (MULTI-MODELO) -->
+<h2>🎛️ Roteamento Inteligente de IA por Módulo (Multi-Modelo)</h2>
+<p class="mut" style="margin:-8px 0 16px;font-size:13px">
+  Distribua as tarefas entre diferentes conexões e modelos. Mantenha módulos locais para custo zero de tokens e use nuvem/gateways apenas onde for necessário.
+</p>
+
+<form method="post" action="/llm/roteamento" class="card" style="margin-bottom:24px">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div style="display:grid;gap:16px">
+    {% for mod_k, m in roteamento.modulos.items() %}
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;border-bottom:1px solid var(--line);padding-bottom:14px">
+        <div style="flex:1;min-width:280px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:20px">{{ m.icone }}</span>
+            <b style="font-size:14px;color:var(--fg)">{{ m.nome }}</b>
+            {% if mod_k == 'voz' %}
+              {% if m.is_embutido %}
+                <span class="badge publicado" style="font-size:10px">Whisper Local (Zero Tokens)</span>
+              {% else %}
+                <span class="badge publicado" style="font-size:10px">GPU ({{ m.servidor_ativo }})</span>
+              {% endif %}
+            {% else %}
+              {% if m.conexao_id %}
+                <span class="badge publicado" style="font-size:10px">Modelo Dedicado</span>
+              {% else %}
+                <span class="badge mut" style="font-size:10px">Usando Padrão</span>
+              {% endif %}
+            {% endif %}
+          </div>
+          <p class="mut" style="font-size:12px;margin:4px 0 0">{{ m.descricao }}</p>
+          {% if mod_k == 'voz' %}
+            <small style="color:#7ca5cc;font-size:11px">⚡ {{ m.status_amigavel }}</small>
+          {% else %}
+            <small style="color:#7ca5cc;font-size:11px">💡 Recomendado: {{ m.recomendado }}</small>
+          {% endif %}
+        </div>
+
+        <div style="min-width:280px">
+          {% if mod_k == 'voz' %}
+            <label style="font-size:12px;margin:0 0 4px;color:var(--mut)">Motor de Voz / Transcrição Alocado:</label>
+            <select name="modulo_voz" style="width:100%;margin:0">
+              <option value="embutido" {% if m.tipo_motor == 'embutido' %}selected{% endif %}>
+                🟢 Whisper Local Embutido (CPU/NPU · Custo Zero & Zero Tokens)
+              </option>
+              <option value="chatterbox" {% if m.tipo_motor == 'chatterbox' %}selected{% endif %}>
+                ⚡ Servidor GPU Chatterbox (Clonagem Rápida · {{ url_voz_local }})
+              </option>
+              <option value="qwen" {% if m.tipo_motor == 'qwen' %}selected{% endif %}>
+                ⚡ Servidor GPU Qwen3-TTS (Clonagem Emotiva · {{ url_voz_qwen }})
+              </option>
+            </select>
+            <small class="mut" style="font-size:11px;display:block;margin-top:4px">
+              Auto-fallback: se o container GPU estiver em standby, o Whisper Embutido assume automaticamente.
+            </small>
+          {% else %}
+            <label style="font-size:12px;margin:0 0 4px;color:var(--mut)">Conexão / Modelo Alocado:</label>
+            <select name="modulo_{{ mod_k }}" style="width:100%;margin:0">
+              <option value="">Padrão Geral ({% if roteamento.conexoes_disponiveis %}{{ (roteamento.conexoes_disponiveis|selectattr('padrao')|first or roteamento.conexoes_disponiveis[0]).nome }}{% else %}Nenhuma conexão{% endif %})</option>
+              {% for c in roteamento.conexoes_disponiveis %}
+                <option value="{{ c.id }}" {% if m.conexao_id == c.id %}selected{% endif %}>
+                  {{ c.nome }} ({{ c.modelo }}) {% if c.padrao %}[Padrão]{% endif %}
+                </option>
+              {% endfor %}
+            </select>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="acts" style="margin-top:16px;justify-content:flex-end">
+    <button type="submit" style="padding:10px 20px">💾 Salvar Roteamento Inteligente</button>
+  </div>
+</form>
+
+<!-- 4. CONTROLE AVANÇADO DE MOTORES DE CLONAGEM GPU (OPCIONAL) -->
+<details class="card" style="margin-bottom:24px;background:#0d1117" {% if servidor_voz and servidor_voz.ok %}open{% endif %}>
+  <summary style="cursor:pointer;font-weight:600;color:var(--fg);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span>🎙️</span>
+      <span>Motores de Clonagem de Voz por GPU (Opcional · Chatterbox / Qwen3-TTS)</span>
+    </div>
+    <div>
+      {% if servidor_voz and servidor_voz.ok %}
+        <span class="badge publicado">🟢 Servidor GPU Online ({{ servidor_voz.url }})</span>
+      {% else %}
+        <span class="badge mut">⚪ GPU Standby (Whisper Local Embutido Ativo)</span>
+      {% endif %}
+    </div>
+  </summary>
+
+  <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+    <p class="mut" style="font-size:13px;margin:0 0 12px">
+      Para legendas e narrações padrão, o <b>Whisper Local Embutido</b> atende com 100% de economia e zero consumo de VRAM. Os containers GPU são sob demanda para quem deseja clonar vozes com amostras de áudio:
+    </p>
+
+    {% if servidor_voz and servidor_voz.ok %}
+      <p class="mut" style="font-size:13px;margin:0 0 12px">
+        GPU: <b>{{ servidor_voz.gpu or 'Detectada na placa' }}</b> · Transcrição: <b>{{ servidor_voz.whisper or '-' }}</b> · Voz: <b>{{ servidor_voz.tts or '-' }}</b> {% if servidor_voz.clonagem %}· <span style="color:var(--ok)">Clonagem ativa</span>{% endif %}
+      </p>
+      {% if not servidor_voz.generico %}
+        <div class="acts" style="align-items:center;margin-bottom:12px">
+          <form method="post" action="/voz/servidor/descarregar">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button type="submit" class="sec" {% if not servidor_voz.carregado %}disabled{% endif %}>
+              ⏏ Liberar Memória da GPU (Descarregar Modelos)
+            </button>
+          </form>
+          <span class="mut" style="font-size:12px">
+            {% if servidor_voz.carregado %}Modelos carregados na VRAM da GPU.{% else %}Modelos fora da memória; recarregam sozinhos na próxima narração.{% endif %}
+          </span>
+        </div>
+      {% endif %}
+    {% else %}
+      <div style="background:#131822;border-left:3px solid var(--line);padding:10px 14px;border-radius:4px;margin-bottom:12px">
+        <span style="font-size:12px;color:var(--mut)">
+          Container GPU atualmente em espera (sem consumir memória da sua placa). Se desejar rodar clonagem avançada:
+          <code style="display:inline-block;margin:4px 0">docker compose --profile gpu up -d</code> (Chatterbox) ou <code style="display:inline-block;margin:4px 0">docker compose --profile qwen up -d</code> (Qwen3-TTS).
+        </span>
+      </div>
+    {% endif %}
+
+    <div class="acts" style="margin-top:10px;flex-wrap:wrap">
+      <form method="post" action="/voz/servidor/embutido" style="margin:0">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="sec" type="submit">🟢 Fixar Whisper Embutido (Zero GPU / Zero Tokens)</button>
+      </form>
+      <form method="post" action="/voz/servidor/usar" style="margin:0">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="motor" value="chatterbox">
+        <button class="sec" type="submit">Apontar Chatterbox ({{ url_voz_local }})</button>
+      </form>
+      <form method="post" action="/voz/servidor/usar" style="margin:0">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="motor" value="qwen">
+        <button class="sec" type="submit">Apontar Qwen3-TTS ({{ url_voz_qwen }})</button>
+      </form>
+      <a href="/voz" class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line)">🎙️ Gerenciar Amostras de Voz</a>
+    </div>
+  </div>
+</details>
+
+<!-- 4. MODELOS LOCAIS OLLAMA (1 CLIQUE) -->
+<h2>⚡ Servidor Ollama Embutido (Modelos Locais com 1 Clique)</h2>
+<div class="card" style="margin-bottom:24px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+    <div>
+      <b>Ollama Local com Aceleração de Hardware</b>
+      <p class="mut" style="margin:4px 0 0;font-size:13px">
+        Baixe e execute modelos leves 100% offline no Docker. Suporta manter múltiplos modelos carregados em memória simultaneamente.
+      </p>
+    </div>
+    <div>
+      {% if local and local.online %}
+        <span class="badge publicado">🟢 Ollama Online ({{ local.base_url }})</span>
+      {% else %}
+        <span class="badge falhou">🔴 Ollama Desconectado</span>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if local and local.download and local.download.ativo %}
+  <div class="card" style="background:#111827;border:1px solid var(--acc);margin-bottom:16px" id="card-download">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <b>📥 Baixando Modelo: <code>{{ local.download.modelo }}</code></b>
+      <span class="badge aviso" id="badge-pct">{{ local.download.percentual }}%</span>
+    </div>
+    <div style="background:var(--line);border-radius:4px;height:10px;margin:10px 0;overflow:hidden">
+      <div id="progresso-bar" style="background:var(--acc);height:100%;width:{{ local.download.percentual }}%;transition:width 0.4s ease"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--mut)">
+      <span id="txt-status">{{ local.download.status }}</span>
+      <span>Configuração automática ao concluir</span>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:12px">
+    {% for tag, mod in ((local.catalogo.items()) if (local and local.catalogo) else []) %}
+      {% set baixado = local and (tag in local.modelos_instalados or (tag ~ ':latest') in local.modelos_instalados) %}
+      {% set eh_padrao = local and local.modelo_padrao == tag %}
+      <div class="card" style="background:#131820;border:1px solid {{ 'var(--acc)' if eh_padrao else 'var(--line)' }};padding:14px;display:flex;flex-direction:column;justify-content:space-between">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <b>{{ mod.nome }}</b>
+              {% if mod.recomendado %}<span class="badge publicado" style="font-size:10px;margin-left:4px">Mais leve</span>{% endif %}
+            </div>
+            <span class="badge mut" style="font-size:11px">{{ mod.tamanho }}</span>
+          </div>
+          <p class="mut" style="font-size:12px;margin:8px 0 12px;min-height:36px">{{ mod.descricao }}</p>
+        </div>
+
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--mut);margin-bottom:10px">
+            <span>RAM: {{ mod.ram }}</span>
+            {% if eh_padrao %}
+              <span class="badge publicado">✓ Padrão Geral</span>
+            {% elif baixado %}
+              <span class="badge publicado">✓ Instalado</span>
+            {% else %}
+              <span class="badge mut">Não baixado</span>
+            {% endif %}
+          </div>
+
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            {% if baixado %}
+              <form method="post" action="/llm/local/ativar" style="margin:0;flex:1">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <input type="hidden" name="modelo" value="{{ tag }}">
+                <button class="sec" type="submit" style="width:100%;padding:4px 8px;font-size:11px">Padrão Geral</button>
+              </form>
+              <form method="post" action="/llm/local/ativar" style="margin:0;flex:1">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <input type="hidden" name="modelo" value="{{ tag }}">
+                <input type="hidden" name="modulo" value="chat">
+                <button class="sec" type="submit" style="width:100%;padding:4px 8px;font-size:11px" title="Alocar para o Bot Telegram">💬 Alocar Bot</button>
+              </form>
+            {% else %}
+              <form method="post" action="/llm/local/baixar" style="margin:0;width:100%">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <input type="hidden" name="modelo" value="{{ tag }}">
+                <button type="submit" style="width:100%;padding:6px 10px;font-size:12px">⚡ Baixar com 1 Clique</button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- 5. ESTRATÉGIA DE INTELIGÊNCIA (CALLOUT) -->
+<div class="card" style="border-left:4px solid var(--acc);background:#161c24;margin-bottom:20px;padding:16px">
+  <div style="display:flex;align-items:flex-start;gap:12px">
+    <div style="font-size:24px;line-height:1">💡</div>
+    <div>
+      <b style="font-size:15px;color:var(--fg)">Arquitetura Híbrida: Nuvem para Raciocínio Profundo + Local para Execução Rápida</b>
+      <p class="mut" style="margin:6px 0 8px;font-size:13px;line-height:1.5">
+        A melhor estratégia de performance e custo para o seu canal:
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:10px">
+        <div style="background:#0e1217;border:1px solid var(--line);border-radius:6px;padding:12px">
+          <span class="badge publicado" style="font-weight:600">🚀 Nuvem (Gemini, Claude, GPT-4o)</span>
+          <p style="font-size:13px;margin:6px 0 0;color:var(--fg)">
+            Alocado nos módulos <b>Redação de Legendas</b> e <b>Roteiros de Carrossel</b>. Garante ganchos psicológicos com retenção máxima, sem tom robótico e sem esquentar seu computador.
+          </p>
+        </div>
+        <div style="background:#0e1217;border:1px solid var(--line);border-radius:6px;padding:12px">
+          <span class="badge aviso" style="font-weight:600">⚡ Local (GPU RTX / NPU Intel Core Ultra)</span>
+          <p style="font-size:13px;margin:6px 0 0;color:var(--fg)">
+            Alocado em <b>Chat do Telegram</b>, <b>Radar de Notícias</b> e <b>Voz Local (TTS)</b>. Resposta imediata, sem custo de API por requisição e operação 100% contínua.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 6. OPENROUTER (MODELOS GRATUITOS :FREE & COMERCIAIS) -->
+<h2 id="openrouter-box">🌐 OpenRouter (Modelos Gratuitos :free & Comerciais)</h2>
+<div class="card" style="background:#0f1722;border:1px solid #1e293b;margin-bottom:24px;padding:16px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:14px">
+    <div style="flex:1;min-width:280px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px">🚀</span>
+        <b style="font-size:15px;color:var(--fg)">Conexão Direta OpenRouter</b>
+        {% if openrouter_con %}
+          <span class="badge publicado" style="font-size:11px">Conectado (ID #{{ openrouter_con.id }})</span>
+        {% else %}
+          <span class="badge mut" style="font-size:11px">Não configurado</span>
+        {% endif %}
+      </div>
+      <p class="mut" style="margin:6px 0 0;font-size:13px">
+        O OpenRouter unifica centenas de inteligências artificiais sob uma única chave de API. Inclui modelos com uso <b>100% gratuito</b> (com sufixo <code>:free</code>, como Llama 3.3 70B, DeepSeek R1, Nemotron e Gemma) e modelos de ponta do mercado (Claude 3.5 Sonnet, GPT-4o, DeepSeek Chat).
+      </p>
+    </div>
+    <a href="https://openrouter.ai/keys" target="_blank" class="badge mut" style="text-decoration:none;font-size:12px;padding:6px 12px;display:inline-flex;align-items:center;gap:4px">
+      Obter Chave na OpenRouter ↗
+    </a>
+  </div>
+
+  <form method="post" action="/llm/openrouter" style="margin:0;background:#131d2a;border:1px solid var(--line);border-radius:6px;padding:16px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label style="font-weight:600;display:block;margin-bottom:6px">
+      Chave de API da OpenRouter (API Key)
+    </label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input type="password" name="api_key" placeholder="Cole sua chave sk-or-v1-..." value="{{ openrouter_key_mascarada }}" autocomplete="off" style="flex:1;min-width:260px" required>
+      <button type="submit" class="pri" style="white-space:nowrap;padding:8px 16px;background:var(--acc);color:#000;font-weight:700">
+        ⚡ Salvar Chave & Conectar OpenRouter
+      </button>
+      {% if openrouter_con %}
+        <a class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line);padding:8px 14px" href="/llm?editar={{ openrouter_con.id }}">
+          Gerenciar Modelos ({{ openrouter_con.modelo }})
+        </a>
+      {% endif %}
+    </div>
+    <small class="mut" style="display:block;margin-top:8px;font-size:12px">
+      💡 Ao salvar, o sistema conecta à OpenRouter, valida sua chave, detecta os modelos disponíveis (priorizando a lista gratuita <code>:free</code>) e deixa tudo pronto para alocação nos módulos do sistema.
+    </small>
+  </form>
+</div>
+
+<!-- 7. CONEXÕES DE LLM CADASTRADAS -->
+<h2>Conexões de LLM Cadastradas</h2>
+<div class="card">
+  <table>
+    <tr><th>Nome</th><th>Tipo</th><th>Endereço</th><th>Modelo</th><th></th></tr>
+    {% for c in lista %}
+    <tr>
+      <td>{{ c.nome }} {% if c.padrao %}<span class="badge publicado">padrão</span>{% endif %}</td>
+      <td>{{ tipos[c.tipo] if c.tipo in tipos else c.tipo }}</td>
+      <td><small>{{ c.base_url or '—' }}</small></td>
+      <td>{{ c.modelo }}</td>
+      <td>
+        <div class="acts" style="margin:0">
+          <a class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line)" href="/llm?editar={{ c.id }}">Editar</a>
+          <form method="post" action="/llm/{{ c.id }}/testar" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sec">Testar</button></form>
+          {% if not c.padrao %}<form method="post" action="/llm/{{ c.id }}/padrao" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="sec">Tornar padrão</button></form>{% endif %}
+          <form method="post" action="/llm/{{ c.id }}/remover" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="bad" onclick="return confirm('Remover esta conexão?')">Remover</button></form>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="mut">Nenhuma conexão cadastrada ainda. Adicione uma conexão abaixo ou baixe um modelo local com 1 clique acima.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<!-- 8. EDITAR / NOVA CONEXÃO -->
+<h2>{{ 'Editar conexão' if f.id else 'Nova Conexão Manual (Nuvem ou Servidor Externo)' }}</h2>
+<form method="post" action="/llm/editar" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ f.id }}">
+  <div class="row">
+    <div><label>Nome da Conexão</label><input name="nome" value="{{ f.nome }}" placeholder="Ex.: Google Gemini 2.0 Flash ou LM Studio Local" required></div>
+    <div><label>Tipo de Provedor</label>
+      <select name="tipo" id="tipo">{% for k, v in tipos.items() %}<option value="{{ k }}" {{ 'selected' if f.tipo==k }}>{{ v }}</option>{% endfor %}</select></div>
+  </div>
+  <div class="row">
+    <div id="box-url"><label>Endereço do servidor (URL)</label><input name="base_url" id="base_url" value="{{ f.base_url }}"></div>
+    <div><label>Chave de API <small>(deixe vazio se o servidor for local sem chave{% if f.id %}; vazio mantém a atual{% endif %})</small></label><input type="password" name="api_key" autocomplete="off"></div>
+  </div>
+  <p class="mut" id="dica" style="font-size:13px;margin:8px 0 0"></p>
+  <label>Modelo</label>
+  {% if modelos %}
+    <select name="modelo">{% for m in modelos %}<option {{ 'selected' if m==f.modelo }}>{{ m }}</option>{% endfor %}</select>
+  {% else %}
+    <input name="modelo" value="{{ f.modelo }}" placeholder="Clique em “Detectar modelos” ou digite o nome do modelo (ex: gemini-2.0-flash, claude-3-5-sonnet-latest)">
+  {% endif %}
+  <label><input type="checkbox" name="padrao" {{ 'checked' if f.padrao }}> Usar como padrão geral do sistema</label>
+  <div class="acts">
+    <button class="sec" type="submit" name="acao" value="detectar">Detectar modelos</button>
+    <button type="submit" name="acao" value="aplicar">Aplicar e testar</button>
+    {% if f.id %}<a class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line)" href="/llm">Nova conexão</a>{% endif %}
+  </div>
+</form>
+
+<script>
+const DICAS = {{ dicas|tojson }};
+const NOTAS = {
+  openrouter: "OpenRouter: Chave obtida em openrouter.ai/keys. Unifica centenas de modelos incluindo modelos gratuitos (tag :free).",
+  openai: "Compatível com LM Studio, vLLM ou OpenAI. No Docker, use host.docker.internal em vez de localhost para acessar serviços no Windows.",
+  ollama: "Ollama embutido roda na porta 11434. Com o app no Docker, use http://llm:11434 ou host.docker.internal:11434.",
+  gemini: "Informe sua chave do Google AI Studio. Os modelos mais rápidos e inteligentes serão listados automaticamente.",
+  anthropic: "Informe sua chave da Anthropic (Claude 3.5 Sonnet / Haiku)."
+};
+const t = document.getElementById('tipo'), u = document.getElementById('base_url'), box = document.getElementById('box-url');
+function atualiza(){
+  const k = t.value;
+  const precisaUrl = (k==='openai'||k==='ollama');
+  box.style.display = precisaUrl ? '' : 'none';
+  if (k === 'openrouter' && (!u.value || u.value.includes('localhost') || u.value.includes('3000') || u.value.includes('3001'))) {
+    u.value = 'https://openrouter.ai/api/v1';
+  }
+  u.placeholder = DICAS[k] || '';
+  document.getElementById('dica').textContent = NOTAS[k] || '';
+}
+t.addEventListener('change', atualiza); atualiza();
+
+{% if local and local.download and local.download.ativo %}
+setInterval(async () => {
+  try {
+    const res = await fetch('/llm/local/status');
+    const data = await res.json();
+    if (data && data.download) {
+      const bPct = document.getElementById('badge-pct');
+      const pBar = document.getElementById('progresso-bar');
+      const tStat = document.getElementById('txt-status');
+      if (bPct) bPct.textContent = data.download.percentual + '%';
+      if (pBar) pBar.style.width = data.download.percentual + '%';
+      if (tStat) tStat.textContent = data.download.status;
+      if (!data.download.ativo && data.download.status === 'concluido') {
+        window.location.reload();
+      }
+    }
+  } catch (e) {}
+}, 2000);
+{% endif %}
+</script>
+{% endblock %}

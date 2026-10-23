@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<style>
+  :root{--acc:#ff7a1a}
+  *{box-sizing:border-box;margin:0}
+  html,body{width:1080px;height:{{ altura|default(1920) }}px;background:transparent;
+    font-family:"Inter","Segoe UI","Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  
+  /* zonas seguras do Story (topo ~250px e base ~340px) */
+  .scrim{position:absolute;left:0;right:0;bottom:0;height:{{ (altura|default(1920) * 0.52)|int }}px;
+    background:linear-gradient(to top, rgba(4,6,10,0.92) 0%, rgba(6,9,14,0.72) 50%, rgba(8,10,14,0) 100%)}
+  
+  .top-selo{position:absolute;left:72px;top:230px;z-index:10;max-width:600px}
+  .top-selo img{height:130px;width:auto;display:block}
+  
+  .box{position:absolute;left:64px;right:64px;bottom:{{ base|default(360) }}px;z-index:10;
+    background:rgba(12, 16, 24, 0.72);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+    border:1.5px solid rgba(255, 255, 255, 0.16);border-radius:28px;padding:48px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.12)}
+  
+  .rule{width:110px;height:7px;background:var(--acc);margin-bottom:28px;border-radius:4px;
+    box-shadow:0 0 14px rgba(255, 122, 26, 0.5)}
+  .txt{color:#ffffff;font-size:{{ tamanho }}px;line-height:1.15;font-weight:800;letter-spacing:-1.2px;
+    text-shadow:0 2px 20px rgba(0,0,0,0.6)}
+  .by{margin-top:28px;color:#cbd2db;font-size:30px;font-weight:600;display:flex;align-items:center;gap:12px}
+  .by .dot{width:14px;height:14px;border-radius:50%;background:var(--acc)}
+  .men{margin-top:24px;display:flex;flex-wrap:wrap;gap:12px}
+  .men span{background:rgba(255,255,255,0.95);color:#0a0d12;font-weight:800;font-size:38px;padding:6px 20px;border-radius:12px}
+  
+  {{ marca_css|safe }}
+</style></head>
+<body>
+  <div class="scrim"></div>
+  {% if selo_uri %}<div class="top-selo"><img src="{{ selo_uri }}" alt=""></div>{% endif %}
+  <div class="box">
+    {% if texto %}<div class="rule"></div><div class="txt">{{ texto }}</div>{% endif %}
+    {% if mencoes %}<div class="men">{% for m in mencoes %}<span>{{ m }}</span>{% endfor %}</div>{% endif %}
+    {% if handle %}<div class="by"><span class="dot"></span>{{ handle }}</div>{% endif %}
+  </div>
+</body></html>

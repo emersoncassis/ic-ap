@@ -1,0 +1,124 @@
+"""Instagram Graph API (fluxo Facebook Login): publicar imagem e conferir a conta."""
+import json
+import asyncio
+
+import httpx
+
+from . import config as C
+
+
+class MetaError(Exception):
+    pass
+
+
+async def _graph(c: httpx.AsyncClient, method: str, path: str, token: str, **params):
+    params["access_token"] = token
+    r = await c.request(method, f"{C.IG_BASE}/{path}", params=params)
+    try:
+        data = r.json()
+    except ValueError:
+        raise MetaError(f"resposta inválida da Meta (HTTP {r.status_code})")
+    if r.status_code >= 400 or "error" in data:
+        err = data.get("error", {})
+        raise MetaError(f"{err.get('message', 'erro desconhecido')} (code {err.get('code')})")  # sem o token
+    return data
+
+
+def _params_midia(url: str, legenda: str, formato: str, capa: str = "") -> dict:
+    """feed: foto; story: imagem ou vídeo (sem legenda); reel: vídeo."""
+    video = url.lower().endswith(".mp4")
+    if formato == "story":
+        return {"media_type": "STORIES", ("video_url" if video else "image_url"): url}
+    if formato == "reel" or video:
+        return {"media_type": "REELS", "video_url": url, "caption": legenda, "share_to_feed": "true", **({"cover_url": capa} if capa else {})}
+    return {"image_url": url, "caption": legenda}
+
+
+async def _esperar(c: httpx.AsyncClient, cid: str, token: str, video: bool = False) -> None:
+    tentativas = C.IG_POLL_TRIES * (10 if video else 1)  # vídeo demora mais
+    for _ in range(tentativas):
+        st = (await _graph(c, "GET", cid, token, fields="status_code")).get("status_code")
+        if st == "FINISHED":
+            return
+        if st in ("ERROR", "EXPIRED"):
+            raise MetaError(f"container em {st}")
+        await asyncio.sleep(C.IG_POLL_SECONDS)
+    raise MetaError("container não ficou pronto a tempo")
+
+
+def _user_tags(mencoes: list[str]) -> dict:
+    """Menções reais (notificam o usuário). Story, foto e vídeo aceitam user_tags; carrossel não (a menção vai na legenda)."""
+    nomes = [m.lstrip("@") for m in mencoes if m.strip("@")][:20]
+    return {"user_tags": json.dumps([{"username": n, "x": 0.5, "y": 0.78} for n in nomes])} if nomes else {}
+
+
+async def publicar(ig_user_id: str, token: str, media_url: str, legenda: str, formato: str = "feed", mencoes: list[str] | None = None,
+                   capa: str = "") -> str:
+    async with httpx.AsyncClient(timeout=60) as c:
+        cont = await _graph(c, "POST", f"{ig_user_id}/media", token, **_params_midia(media_url, legenda, formato, capa), **_user_tags(mencoes or []))
+        await _esperar(c, cont["id"], token, media_url.lower().endswith(".mp4"))
+        pub = await _graph(c, "POST", f"{ig_user_id}/media_publish", token, creation_id=cont["id"])
+    return pub["id"]
+
+
+async def publicar_carrossel(ig_user_id: str, token: str, urls: list[str], legenda: str) -> str:
+    """Carrossel: um container por imagem (is_carousel_item) + um container CAROUSEL com os filhos. 2 a 10 imagens."""
+    if not 2 <= len(urls) <= 10:
+        raise MetaError("carrossel precisa de 2 a 10 imagens")
+    async with httpx.AsyncClient(timeout=60) as c:
+        filhos = []
+        for u in urls:
+            filhos.append((await _graph(c, "POST", f"{ig_user_id}/media", token, image_url=u, is_carousel_item="true"))["id"])
+        for f in filhos:
+            await _esperar(c, f, token)
+        cont = await _graph(c, "POST", f"{ig_user_id}/media", token, media_type="CAROUSEL", children=",".join(filhos), caption=legenda)
+        await _esperar(c, cont["id"], token)
+        pub = await _graph(c, "POST", f"{ig_user_id}/media_publish", token, creation_id=cont["id"])
+    return pub["id"]
+
+
+async def conferir(ig_user_id: str, token: str) -> dict:
+    async with httpx.AsyncClient(timeout=30) as c:
+        try:
+            conta = await _graph(c, "GET", ig_user_id, token, fields="username")
+            lim = await _graph(c, "GET", f"{ig_user_id}/content_publishing_limit", token, fields="quota_usage,config")
+        except MetaError as e:
+            if "nonexisting field" in str(e):  # o ID não é o de uma conta profissional do Instagram
+                raise MetaError("o ID informado não é o de uma conta do Instagram (provavelmente é o ID da Página ou do usuário do "
+                                "Facebook). Use o assistente de token no cadastro do perfil: ele preenche o ID certo.")
+            if "pages_read_engagement" in str(e) or "does not exist, cannot be loaded" in str(e):
+                raise MetaError("a Meta não deixou ler essa conta com este token. Causas comuns: (1) foi colado um token de usuário em vez do "
+                                "token da Página; (2) o ID não é o da conta do Instagram; (3) a Página não foi marcada na tela de "
+                                "autorização do Facebook ou você não tem controle total dela. Refaça pelo assistente de token do perfil. "
+                                f"Detalhe da Meta: {str(e)[:160]}")
+            raise
+    return {"username": conta.get("username"), "limite": lim.get("data", lim)}
+
+
+async def token_longo(app_id: str, app_secret: str, token_curto: str) -> str:
+    """Troca o token de usuário (curto) por um longo (~60 dias). O App Secret é usado só nesta chamada."""
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.get(f"{C.IG_BASE}/oauth/access_token", params={
+            "grant_type": "fb_exchange_token", "client_id": app_id, "client_secret": app_secret,
+            "fb_exchange_token": token_curto})
+    try:
+        data = r.json()
+    except ValueError:
+        raise MetaError(f"resposta inválida da Meta (HTTP {r.status_code})")
+    if r.status_code >= 400 or "access_token" not in data:
+        raise MetaError(f"{data.get('error', {}).get('message', 'não foi possível trocar o token')}")
+    return data["access_token"]
+
+
+async def paginas(token_usuario: str) -> list[dict]:
+    """Páginas do usuário que têm Instagram profissional ligado, com o token de cada Página."""
+    async with httpx.AsyncClient(timeout=30) as c:
+        d = await _graph(c, "GET", "me/accounts", token_usuario, limit=100,
+                         fields="name,id,access_token,instagram_business_account{id,username}")
+    res = []
+    for p in d.get("data", []):
+        igb = p.get("instagram_business_account")
+        if igb:
+            res.append({"id": p["id"], "nome": p["name"], "token": p["access_token"],
+                        "ig_id": igb["id"], "ig_user": igb.get("username", "")})
+    return res
