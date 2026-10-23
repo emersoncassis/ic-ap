@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 def make(port: int) -> FastAPI:
     app = FastAPI()
-    st = {"agente": [], "carrossel_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False, "banco": [], "voz": [], "whisper_modo": "ok", "voz_modo": "ok", "imagens": 0, "foto_modo": "ok"}
+    st = {"agente": [], "carrossel_modo": "ok", "critico_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False, "banco": [], "voz": [], "whisper_modo": "ok", "voz_modo": "ok", "imagens": 0, "foto_modo": "ok"}
     app.state.st = st
 
     @app.get("/_st")
@@ -20,7 +20,7 @@ def make(port: int) -> FastAPI:
 
     @app.post("/_reset")
     def _reset(request: Request):
-        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok", higgs_video_modo="ok", voz=[], whisper_modo="ok", voz_modo="ok", foto_modo="ok", imagens=0)
+        st.update(agente=[], carrossel_modo="ok", critico_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok", higgs_video_modo="ok", voz=[], whisper_modo="ok", voz_modo="ok", foto_modo="ok", imagens=0)
         return {}
 
     @app.post("/_set")
@@ -82,10 +82,10 @@ def make(port: int) -> FastAPI:
             return json.dumps({**base, **r}, ensure_ascii=False)
         if "monta um carrossel" in system:
             n = int(re.search(r"EXATAMENTE (\d+) slides", system).group(1))
-            slides = [{"titulo": f"Slide {i} da ideia", "texto": ("palavra " * 50 if st["carrossel_modo"] == "estoura" and i == 2 else f"Texto curto do slide {i}.")}
-                      for i in range(1, n + 1)]
-            if st["carrossel_modo"] == "estoura":
-                st["carrossel_modo"] = "ok"
+            modo = st["carrossel_modo"]  # defeitos que valem só para a próxima resposta: estoura (slide 2 longo), vazio (slide 1 sem texto), faltando (um slide a menos)
+            slides = [{"titulo": f"Slide {i} da ideia", "texto": ("palavra " * 50 if modo == "estoura" and i == 2 else "" if modo == "vazio" and i == 1 else f"Texto curto do slide {i}.")}
+                      for i in range(1, n + (0 if modo == "faltando" else 1))]
+            st["carrossel_modo"] = "ok"
             return json.dumps({"slides": slides, "legenda_instagram": "Carrossel sobre a ideia.", "cta": "Salve este post.",
                                "hashtags": ["ia", "#Empresas", "tecnologia", "gestão", "#ia", "dados privados", "ysafe", "saude digital"]}, ensure_ascii=False)
         if "escreve um post de Instagram (imagem" in system:
@@ -112,6 +112,51 @@ def make(port: int) -> FastAPI:
             return json.dumps({"texto": "Disciplina sustenta o resultado. Sempre."}, ensure_ascii=False)
         if "sugere hashtags" in system:
             return json.dumps({"hashtags": ["#novatag1", "#novatag2", "#novatag3", "#novatag4"]})
+        if "ESTRATEGISTA" in system:
+            return json.dumps({
+                "formato": "feed",
+                "objetivo": "saves",
+                "angulo": "contraintuitivo",
+                "fatos_centrais": ["Dados privados na empresa", "Governança local", "Zero vazamento"],
+                "proposta_de_valor": "O segredo não é gerar mais dados, é manter o controle local.",
+                "palavras_chave": ["dados", "empresa", "controle"],
+            }, ensure_ascii=False)
+        if "DIRETOR-DE-ARTE" in system:
+            return json.dumps({
+                "layout": "editorial",
+                "justificativa_layout": "Tese forte com foco tipográfico",
+                "paleta": {
+                    "fundo": "#080a0f",
+                    "texto_primario": "#ffffff",
+                    "texto_secundario": "#94a3b8",
+                    "destaque": "#00f0ff",
+                    "borda": "rgba(255,255,255,0.12)",
+                },
+                "palavras_destaque": ["controle"],
+                "selo": {"usar": False, "estilo": "nenhum", "texto": "", "subtexto": ""},
+                "imagem": {"usar": False, "busca_ingles": "", "estilo_visual": ""},
+            }, ensure_ascii=False)
+        if "CRITICO-VISUAL" in system:
+            reprova = st["critico_modo"] == "reprova"  # reprova só a próxima avaliação: contraste fraco
+            st["critico_modo"] = "ok"
+            crit = {k: {"ok": True, "justificativa": "ok"} for k in ("texto_cortado", "contraste", "legibilidade", "hierarquia", "safe_zone")}
+            if reprova:
+                crit["contraste"] = {"ok": False, "justificativa": "texto cinza sobre foto clara"}
+            return json.dumps({"criterios": crit, "sugestao_ajuste": "escurecer o fundo" if reprova else ""}, ensure_ascii=False)
+        if "CAPTION-WRITER" in system:
+            return json.dumps({
+                "hook_125": "Dado na mão da empresa: quem controla o servidor controla o jogo.",
+                "manchete_card": "Dado na mão da empresa",
+                "corpo": "Não é moda, é controle.\n\nPergunte onde o dado fica.",
+                "itens_card": ["Controle local", "Governança real", "Custos previsíveis"],
+                "dado_destaque": "100%",
+                "frase_impacto": "Quem controla o dado controla o jogo.",
+                "cta": "Comente o que você acha.",
+                "objetivo": "saves",
+                "legenda_completa": "Minha ideia de hoje sobre controle de dados.\n\nComente o que você acha.\n\n#ia #empresas #dados",
+                "hashtags_sugeridas": ["#ia", "#empresas", "#dados"],
+                "cenas_reels": [],
+            }, ensure_ascii=False)
         ok = {"manchete_curta": "IA vira prioridade nas empresas",
               "minha_reacao": "Não é moda, é controle.\n\nMinha leitura: pergunte onde o dado fica.",
               "legenda_instagram": "Minha leitura sobre a notícia. #ia #empresas #tecnologia",

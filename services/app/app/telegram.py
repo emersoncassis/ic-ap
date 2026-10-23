@@ -1,9 +1,29 @@
-"""Aprovação pelo celular: envia o card com botões e recebe os cliques (long polling)."""
-import asyncio, json
+import asyncio, json, time
 
 import httpx
 
-from . import banco, config as C, db, settings
+from . import banco, config as C, db, settings, tarefas
+
+_ultimo_chat_detectado: dict | None = None
+
+
+def registrar_chat_recente(chat_id: str, nome: str = "", username: str = "") -> dict:
+    global _ultimo_chat_detectado
+    cid = str(chat_id).strip()
+    nm = (nome or username or "Usuário").strip()
+    un = (username or "").strip()
+    dados = {
+        "chat_id": cid,
+        "nome": nm,
+        "username": un,
+        "timestamp": time.time(),
+    }
+    _ultimo_chat_detectado = dados
+    try:
+        db.set_setting("ultimo_chat_tg", json.dumps(dados))
+    except Exception:
+        pass
+    return dados
 
 
 def _url(metodo: str) -> str:
@@ -21,6 +41,58 @@ async def _call(metodo: str, **kw):
 
 def ativo() -> bool:
     return bool(settings.telegram_token())
+
+
+async def obter_me() -> dict | None:
+    """Retorna dados do bot (username, nome) para conferir token."""
+    if not ativo():
+        return None
+    try:
+        return await _call("getMe")
+    except Exception:
+        return None
+
+
+async def detectar_chat_recente() -> dict | None:
+    """Lê as atualizações recentes do bot e identifica o último chat que mandou mensagem."""
+    global _ultimo_chat_detectado
+    # 1. Se já foi interceptado pelo polling na memória (< 2 horas)
+    if _ultimo_chat_detectado and (time.time() - _ultimo_chat_detectado.get("timestamp", 0)) < 7200:
+        return _ultimo_chat_detectado
+
+    # 2. Se foi gravado no banco de dados
+    try:
+        salvo = db.get_setting("ultimo_chat_tg")
+        if salvo:
+            dados = json.loads(salvo)
+            if dados.get("chat_id") and (time.time() - dados.get("timestamp", 0)) < 7200:
+                _ultimo_chat_detectado = dados
+                return dados
+    except Exception:
+        pass
+
+    if not ativo():
+        return None
+
+    # 3. Tenta obter diretamente do Telegram se ainda houver update pendente
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(_url("getUpdates"), data={"limit": 20})
+            data = r.json()
+            if not data.get("ok"):
+                return None
+            updates = data.get("result", [])
+            for u in reversed(updates):
+                msg = u.get("message") or u.get("callback_query", {}).get("message")
+                if msg and msg.get("chat"):
+                    ch = msg["chat"]
+                    cid = str(ch["id"])
+                    nome = ch.get("first_name", "") + (" " + ch.get("last_name", "") if ch.get("last_name") else "")
+                    user = ch.get("username", "")
+                    return registrar_chat_recente(cid, nome, user)
+    except Exception:
+        pass
+    return None
 
 
 async def enviar_card(chat_id: str, arquivo, post_id: int, legenda: str, aviso: str = "") -> str:
@@ -58,10 +130,14 @@ def _TECLADO(post_id: int, imagem: bool = False) -> dict:
         linhas.insert(0, [{"text": f"✅ Agendar {_quando(sug['agendado_para'])}", "callback_data": f"ak:{post_id}"}])
     po = db.one("SELECT formato FROM posts WHERE id=?", (post_id,)) if imagem else None
     if po and po["formato"] in ("feed", "story"):
-        linhas.append([{"text": "📐 Versão Story" if po["formato"] == "feed" else "📐 Versão Feed", "callback_data": f"ad:{post_id}"}])
+        opcoes_extras = [
+            {"text": "📐 Versão Story" if po["formato"] == "feed" else "📐 Versão Feed", "callback_data": f"ad:{post_id}"},
+            {"text": "🎨 Mudar Estilo", "callback_data": f"tpl:{post_id}"},
+        ]
         foto_sua = db.one("SELECT 1 FROM posts WHERE id=? AND fonte='Telegram'", (post_id,))
         if foto_sua and banco.higgs_chave():
-            linhas[-1].append({"text": "🎬 Vídeo por IA", "callback_data": f"ia:{post_id}"})
+            opcoes_extras.append({"text": "🎬 Vídeo por IA", "callback_data": f"ia:{post_id}"})
+        linhas.append(opcoes_extras)
     return {"inline_keyboard": linhas}
 
 
@@ -131,8 +207,16 @@ async def poll(on_acao, on_msg=None) -> None:
                                                            "allowed_updates": json.dumps(["callback_query", "message"])})
             for u in r.json().get("result", []):
                 offset = u["update_id"] + 1
+                msg = u.get("message") or (u.get("callback_query") or {}).get("message")
+                if msg and msg.get("chat"):
+                    ch = msg["chat"]
+                    cid = str(ch.get("id", ""))
+                    nome = ch.get("first_name", "") + (" " + ch.get("last_name", "") if ch.get("last_name") else "")
+                    user = ch.get("username", "")
+                    registrar_chat_recente(cid, nome, user)
+
                 if u.get("message") and on_msg:
-                    asyncio.create_task(on_msg(u["message"]))
+                    tarefas.disparar(on_msg(u["message"]))
                     continue
                 cq = u.get("callback_query")
                 if not cq or ":" not in cq.get("data", ""):
@@ -143,7 +227,7 @@ async def poll(on_acao, on_msg=None) -> None:
                     await _call("answerCallbackQuery", data={"callback_query_id": cq["id"], "text": "Ok, processando…"})
                 except Exception:
                     pass
-                asyncio.create_task(on_acao(acao, int(pid), chat_id))
+                tarefas.disparar(on_acao(acao, int(pid), chat_id))
         except asyncio.CancelledError:
             raise
         except Exception:

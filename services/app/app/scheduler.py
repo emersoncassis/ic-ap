@@ -3,13 +3,15 @@ import asyncio, re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import config as C, db, pipeline, settings
+from . import config as C, db, pipeline, settings, tarefas
 
 JANELA_MIN = 90  # slot perdido há mais que isso (ex.: app desligado) é descartado, não disparado atrasado
 
 
 def slots_devidos(agora: datetime) -> list[tuple[int, str]]:
     hoje, devidos = agora.strftime("%Y-%m-%d"), []
+    # as marcas "slot:<perfil>:<dia>:<hora>" só servem para o próprio dia: sem esta limpeza cresciam para sempre
+    db.x("DELETE FROM settings WHERE k LIKE 'slot:%' AND k NOT LIKE ?", (f"slot:%:{hoje}:%",))
     for p in db.q("SELECT id, horarios FROM perfis WHERE ativo=1"):
         for hh in (h.strip() for h in p["horarios"].split(",")):
             if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", hh):
@@ -32,7 +34,7 @@ async def loop() -> None:
         try:
             await pipeline.publicar_agendados()
             for pid, _ in slots_devidos(datetime.now(ZoneInfo(settings.tz()))):
-                asyncio.create_task(pipeline.gerar(pid, 1, "agenda"))
+                tarefas.disparar(pipeline.gerar(pid, 1, "agenda"))
         except asyncio.CancelledError:
             raise
         except Exception as e:

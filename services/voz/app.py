@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 DATA = Path(os.getenv("DATA_DIR", "/data"))
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "large-v3-turbo")

@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import re
 import stat
 import struct
@@ -79,7 +80,9 @@ def test_primeiro_acesso_cria_senha_e_chave(client):
     assert r.status_code == 303 and r.headers["location"] == "/llm"
     assert anon.get("/setup").headers["location"] == "/login"  # setup só roda uma vez
     # a chave do app foi criada sozinha, com permissão restrita, e a senha não está em texto puro
-    assert C.SECRET_FILE.exists() and stat.S_IMODE(C.SECRET_FILE.stat().st_mode) == 0o600
+    assert C.SECRET_FILE.exists()
+    if os.name != "nt":  # NTFS não tem modo POSIX: no Windows a proteção vem da ACL da pasta do usuário
+        assert stat.S_IMODE(C.SECRET_FILE.stat().st_mode) == 0o600
     assert SENHA.encode() not in C.DB_PATH.read_bytes()
     assert "Ysafe" in db.one("SELECT contexto_md FROM perfis WHERE id=1")["contexto_md"]
 
@@ -695,7 +698,8 @@ def test_carrossel_com_slide_longo_demais_e_refeito(logado, fake):
     assert "longo demais" in fake.st()["llm_users"][-1], "o modelo recebeu o motivo da recusa e encurtou"
     post_form(logado, f"/posts/{p['id']}/descartar")
     esperar(lambda: pipeline.post(p["id"])["estado"] == "descartado")
-    assert not any((C.CARDS / a).exists() for a in __import__("json").loads(p["arquivos"])), "descartar apaga todos os slides"
+    # no Windows o arquivo pode ficar preso por instantes (antivírus/indexador): a remoção é repetida, então espera-se por ela
+    esperar(lambda: not any((C.CARDS / a).exists() for a in __import__("json").loads(p["arquivos"])), 10)
 
 
 def test_versoes_ab_tem_manchetes_e_chamadas_diferentes(logado, fake):
@@ -1098,8 +1102,9 @@ def test_mencao_no_story_aparece_na_imagem_e_no_feed_vai_na_legenda(logado, fake
     p = _novo_post(n)
     assert p["formato"] == "story" and p["arquivo"].endswith(".jpg") and not fake.st()["llm_users"], "só a menção, sem texto pedido: não chama o LLM"
     esperar(lambda: any(m == "sendPhoto" and "menção real" in d["caption"] for m, d in fake.st()["tg"]))
+    # (o overlay agora tem painel de vidro com 64px de margem + 48px de respiro: as caixas brancas começam em x≈113, y≈1389)
     # as caixas brancas das menções deixam pixels claros na zona segura (sem elas a foto de teste não tem branco ali)
-    assert any(_perto(_pixel(C.CARDS / p["arquivo"], x, y), (235, 235, 235), 25) for x in range(76, 92, 4) for y in range(1470, 1560, 6))
+    assert any(_perto(_pixel(C.CARDS / p["arquivo"], x, y), (235, 235, 235), 25) for x in range(120, 140, 4) for y in range(1400, 1490, 6))
     post_form(logado, f"/posts/{p['id']}/aprovar")
     esperar(lambda: pipeline.post(p["id"])["estado"] == "publicado")
     import json
@@ -1412,9 +1417,12 @@ def test_esteira_feed_tem_frase_na_imagem_legenda_e_sem_musica(logado, fake):
 
 def test_esteira_lote_de_fotos_horarios_distintos_e_agendar_todos(logado, fake):
     configurar_perfil(logado, esteira="feed")
-    pipeline.LOTE_ESPERA_S = 1
+    pipeline.LOTE_ESPERA_S = 6  # maior que o tempo de gerar uma foto no Windows (Chromium+ffmpeg): com 1 s o resumo saía antes da 3ª foto ficar pronta
     for r in db.q("SELECT id FROM posts WHERE estado='agendado'"):
         pipeline.desagendar(r["id"])
+    # o resumo conta TODOS os pendentes do Telegram: sobras de testes anteriores falsificariam a contagem
+    db.x("UPDATE posts SET estado='descartado' WHERE estado='aguardando_aprovacao' AND fonte='Telegram'")
+    pipeline._LOTE_N.clear()
     n = _n_midia()
     for _ in range(3):
         fake.push_msg(42, "foto", "")
@@ -1566,7 +1574,7 @@ def test_aba_voz_aparece_no_menu_e_orienta_sem_servidor(logado):
 
 
 def test_voz_exige_consentimento_nome_e_formato_valido(logado):
-    r = _enviar_voz(logado, consentimento=None)
+    _enviar_voz(logado, consentimento=None)
     assert "confirme que a voz é sua" in _flashes(logado.get("/voz").text) and not (C.DATA / "vozes" / "emerson-teste").exists()
     _enviar_voz(logado, dono="outra", autor="")
     assert "diga de quem é a voz" in _flashes(logado.get("/voz").text)

@@ -280,7 +280,7 @@ async def legendar(arquivo: str, palavras: list[dict], destaque: str = "#ffd166"
     ass.write_text(montar_ass(palavras, destaque), encoding="utf-8")
     nome = f"{uuid.uuid4().hex}.mp4"
     try:
-        await _run("ffmpeg", "-y", "-v", "error", "-i", str(C.CARDS / arquivo), "-vf", f"ass={ass}", "-c:v", "libx264", "-preset", "veryfast",
+        await _run("ffmpeg", "-y", "-v", "error", "-i", str(C.CARDS / arquivo), "-vf", f"ass='{ass.as_posix().replace(':', chr(92) + ':')}'", "-c:v", "libx264", "-preset", "veryfast",
                    "-crf", "22", "-c:a", "copy", "-movflags", "+faststart", str(C.CARDS / nome))
     finally:
         ass.unlink(missing_ok=True)

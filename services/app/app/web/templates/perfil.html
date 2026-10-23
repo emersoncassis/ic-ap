@@ -1,6 +1,17 @@
 {% extends "base.html" %}{% block title %}{{ p.nome }} · ic-ap{% endblock %}
 {% block body %}
-<h1>{{ p.nome }}</h1><p class="sub">Edição do perfil #{{ p.id }}. O token nunca é exibido por inteiro.</p>
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+  <div>
+    <h1 style="margin:0">{{ p.nome }}</h1>
+    <p class="sub" style="margin:0">Edição do perfil #{{ p.id }}. O token nunca é exibido por inteiro.</p>
+  </div>
+  <form method="post" action="/perfis/{{ p.id }}/excluir" style="margin:0" onsubmit="return confirm('Tem certeza absoluta que deseja excluir o perfil \'{{ p.nome }}\'?\n\nTodos os feeds exclusivos, posts gerados, conexões e configurações vinculadas serão excluídos permanentemente.');">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" class="bad" style="color:var(--err);border:1px solid var(--err);background:rgba(248,81,73,0.1);padding:7px 14px;border-radius:8px;font-weight:600;cursor:pointer">
+      🗑️ Excluir Perfil
+    </button>
+  </form>
+</div>
 <form method="post" action="/perfis/{{ p.id }}" class="grid">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <div class="card"><h2 style="margin-top:0">Geral</h2>
@@ -45,6 +56,139 @@
   <div class="acts"><button type="submit">Salvar</button><a class="btn sec" style="background:transparent;color:var(--fg);border:1px solid var(--line)" href="/perfis">Voltar</a></div>
 </form>
 
+<!-- Seção Feeds Exclusivos do Perfil -->
+<h2 id="feeds" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+  <div style="display:flex;align-items:center;gap:8px">
+    <span>📰</span> Feeds de Notícias deste Perfil
+    <span class="badge {{ 'publicado' if feeds_perfil else 'aviso' }}">{{ feeds_perfil|length }} ativo(s)</span>
+  </div>
+  {% if feeds_perfil %}
+  <form method="post" action="/perfis/{{ p.id }}/feeds/buscar-agora" style="margin:0">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" style="font-size:12px;padding:6px 12px;background:var(--acc);color:#fff;border:none;border-radius:6px">
+      🔍 Buscar Notícias Agora (Testar Feeds)
+    </button>
+  </form>
+  {% endif %}
+</h2>
+<p class="mut" style="margin-top:-4px">
+  Cada perfil possui seus próprios feeds de notícias em contexto com seu nicho. As matérias e pautas sugeridas para <b>{{ p.nome }}</b> monitoram com prioridade estas fontes.
+</p>
+
+{% if feeds_perfil %}
+<div class="card" style="margin-bottom:18px">
+  <table>
+    <tr><th>Nome</th><th>URL RSS</th><th>Tema</th><th>Status</th><th>Ações</th></tr>
+    {% for f in feeds_perfil %}
+    <tr>
+      <td><b>{{ f.nome }}</b></td>
+      <td><small style="color:var(--mut)">{{ f.url }}</small></td>
+      <td><span class="badge" style="font-size:11px">{{ f.tema or 'geral' }}</span></td>
+      <td><span class="badge {{ 'publicado' if f.ativo else 'falhou' }}">{{ 'Ativo' if f.ativo else 'Inativo' }}</span></td>
+      <td class="acts" style="margin:0">
+        <form method="post" action="/perfis/{{ p.id }}/feeds/{{ f.id }}/alternar">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="sec" style="font-size:12px;padding:4px 8px">{{ 'Desligar' if f.ativo else 'Ligar' }}</button>
+        </form>
+        <form method="post" action="/perfis/{{ p.id }}/feeds/{{ f.id }}/remover">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="bad" style="font-size:12px;padding:4px 8px">Remover</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<div class="card" style="margin-bottom:18px;border:1px dashed var(--warn);background:rgba(210,153,34,0.05)">
+  <b style="color:var(--warn)">⚠️ Este perfil ainda não tem feeds exclusivos configurados.</b>
+  <p class="mut" style="margin:4px 0 0;font-size:13px">
+    Enquanto não houver feeds cadastrados para este perfil, o sistema usa as fontes globais como fallback. 
+    Use a sincronização com o <b>Meta AI</b> abaixo ou importe um pack para personalizar as pautas ao nicho deste perfil.
+  </p>
+</div>
+{% endif %}
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:16px;margin-bottom:28px">
+  <form method="post" action="/perfis/{{ p.id }}/feeds" class="card" style="margin:0">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <h3 style="margin-top:0;font-size:15px">+ Adicionar Feed RSS ao Perfil</h3>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div><label style="margin:0 0 4px">Nome da Fonte / Portal</label><input name="nome" placeholder="Ex.: CISO Advisor Brasil" required></div>
+      <div><label style="margin:0 0 4px">URL do RSS</label><input name="url" placeholder="https://exemplo.com/feed/" required></div>
+      <div><label style="margin:0 0 4px">Tema / Categoria</label><input name="tema" placeholder="Ex.: cibersegurança"></div>
+    </div>
+    <div class="acts" style="margin-top:12px"><button type="submit" class="sec" style="font-size:13px">+ Adicionar a Este Perfil</button></div>
+  </form>
+
+  <div class="card" style="margin:0;display:flex;flex-direction:column;justify-content:space-between">
+    <div>
+      <h3 style="margin-top:0;font-size:15px">⚡ Importar Pack de Feeds em 1 Clique</h3>
+      <p class="mut" style="font-size:13px;margin:0 0 12px">Adiciona um pacote curado de fontes consagradas do nicho diretamente a este perfil.</p>
+      <form method="post" action="/perfis/{{ p.id }}/feeds/importar-pack">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <select name="pack_id" style="margin-bottom:12px">
+          {% for k, pack in pacotes.items() %}
+          <option value="{{ k }}">{{ pack.nome }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="sec" style="font-size:13px;width:100%">+ Importar Pack Selecionado</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Sincronização Inteligente com Meta AI -->
+<h2 id="meta-ai" style="display:flex;align-items:center;gap:8px">
+  <span>🤖</span> Sincronização de Contexto & Feeds com Meta AI
+</h2>
+<div class="card" style="background:#131822;border:1px solid var(--line);padding:20px;margin-bottom:28px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:14px">
+    <div>
+      <h3 style="margin:0 0 4px;font-size:16px">Gerar Feeds & Tom de Voz a partir da Análise do Meta AI</h3>
+      <p class="mut" style="font-size:13px;margin:0">
+        O Meta AI analisa seu perfil no Instagram (<b>@{{ p.handle or 'seu_perfil' }}</b>), identifica os pilares de conteúdo, as palavras-chave estratégicas e gera automaticamente os feeds RSS em contexto.
+      </p>
+    </div>
+  </div>
+
+  <div style="background:#0b0e14;border:1px dashed var(--line);border-radius:8px;padding:12px;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <b style="font-size:13px;color:var(--fg)">Prompt para rodar no Meta AI:</b>
+      <a href="https://www.meta.ai" target="_blank" style="font-size:12px;color:var(--acc)">Abrir meta.ai em nova aba ↗</a>
+    </div>
+    <div style="background:#131822;padding:8px 10px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <code id="prompt-meta-perfil" style="font-size:12px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        Analise o perfil @{{ p.handle or 'usuario' }} do Instagram e descreva: 1. Nicho e posicionamento, 2. Tom de voz, 3. Temas mais abordados e 4. Palavras-chave e fontes recomendadas.
+      </code>
+      <button type="button" class="sec" style="font-size:11px;padding:3px 8px;flex-shrink:0" onclick="navigator.clipboard.writeText(document.getElementById('prompt-meta-perfil').innerText.trim());alert('Prompt copiado!')">Copiar</button>
+    </div>
+  </div>
+
+  <form method="post" action="/perfis/{{ p.id }}/meta-analise">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label style="margin-top:0"><b>Cole abaixo o relatório / análise do Meta AI:</b></label>
+    <textarea name="relatorio" rows="5" placeholder="Cole aqui o texto devolvido pelo Meta AI após analisar seu perfil..." style="width:100%;font-size:13px;margin-bottom:12px">{{ p.meta_ai_analise }}</textarea>
+
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
+      <label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer">
+        <input type="checkbox" name="substituir_feeds" value="1"> Substituir feeds atuais deste perfil pelos feeds gerados da análise do Meta AI
+      </label>
+      {% if tem_meta_ai %}
+      <label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer">
+        <input type="checkbox" name="acao_remota" value="1"> Executar extração automática via Meta AI no navegador (Playwright)
+      </label>
+      {% endif %}
+    </div>
+
+    <div class="acts" style="margin-top:0">
+      <button type="submit" style="background:var(--acc);color:#fff">
+        ✨ Analisar com Meta AI & Sincronizar Feeds em Contexto
+      </button>
+    </div>
+  </form>
+</div>
+
 <h2>Kit de marca</h2>
 <form method="post" action="/perfis/{{ p.id }}/marca" enctype="multipart/form-data" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
   <p class="mut" style="margin-top:0">Cores, fonte e logotipo aplicados nos cards, carrosséis, Stories e citações deste perfil. Também dá para pedir pelo Telegram.</p>
@@ -79,5 +223,16 @@
     {% for pg in paginas %}<tr><td>{{ pg.nome }}</td><td>@{{ pg.ig_user }} <small>({{ pg.ig_id }})</small></td>
       <td><form method="post" action="/perfis/{{ p.id }}/meta/usar" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="idx" value="{{ loop.index0 }}"><button type="submit">Usar neste perfil</button></form></td></tr>{% endfor %}
   </table>{% endif %}
+</div>
+
+<div class="card" style="border:1px solid var(--err);margin-top:28px;background:rgba(248,81,73,0.03);border-radius:12px;padding:20px">
+  <h2 style="color:var(--err);margin-top:0">⚠️ Zona de Perigo: Excluir Perfil</h2>
+  <p class="mut" style="margin-bottom:16px">Ao excluir este perfil, todos os feeds exclusivos cadastrados, posts gerados, conexões de distribuição e configurações associadas serão apagados definitivamente do banco de dados.</p>
+  <form method="post" action="/perfis/{{ p.id }}/excluir" onsubmit="return confirm('Tem certeza absoluta que deseja excluir o perfil \'{{ p.nome }}\'?\n\nEsta ação apagará permanentemente todos os feeds, posts e arquivos vinculados.');" style="margin:0">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" class="bad" style="color:var(--err);border:1px solid var(--err);background:rgba(248,81,73,0.15);padding:9px 18px;border-radius:8px;font-weight:700;cursor:pointer">
+      🗑️ Excluir Perfil Permanentemente
+    </button>
+  </form>
 </div>
 {% endblock %}

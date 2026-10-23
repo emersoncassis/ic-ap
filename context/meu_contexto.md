@@ -27,7 +27,6 @@ Direto, pessoal, primeira pessoa, trato por "você". Frases curtas. Contraste ma
 # Padrões que são meus
 - Estrutura "Não é X, é Y."
 - Pares de contraste: "Minha carreira subia. Minha saúde caía."
-- Fecho em frase-síntese: "No fim, você sabe o que pegar, onde conseguir e como fazer."
 - Expressões: "você seguro", "sem filtro".
 
 # Frases e jeitos que NUNCA uso
@@ -46,5 +45,4 @@ Direto, pessoal, primeira pessoa, trato por "você". Frases curtas. Contraste ma
 - Primeira pessoa, português do Brasil.
 - Sempre citar a fonte da notícia.
 - Opinião marcada como opinião. Não inventar dado que não esteja na matéria.
-- Quando fizer sentido, fechar com uma frase-síntese curta.
 - Não prometer resultado de saúde nem dar orientação médica.

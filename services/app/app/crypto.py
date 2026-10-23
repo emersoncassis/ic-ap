@@ -1,7 +1,10 @@
 """Criptografia dos tokens em repouso (Fernet, chave derivada de APP_SECRET_KEY)."""
 import base64, hashlib, hmac, os, secrets
 
-from cryptography.fernet import Fernet
+try:
+    from cryptography.fernet import Fernet
+except ImportError:
+    Fernet = None
 
 from . import config as C
 
@@ -23,7 +26,9 @@ def secret_key() -> str:
     return _key
 
 
-def _fernet() -> Fernet:
+def _fernet():
+    if Fernet is None:
+        raise RuntimeError("biblioteca cryptography não está instalada neste ambiente")
     return Fernet(base64.urlsafe_b64encode(hashlib.sha256(secret_key().encode()).digest()))
 
 

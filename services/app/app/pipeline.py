@@ -1,10 +1,13 @@
 """Fluxo de um post: capturar -> extrair -> reagir -> renderizar -> aprovar -> publicar."""
-import asyncio, json, re, shutil, sqlite3
+import asyncio, json, logging, re, shutil, sqlite3, threading, time
 from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import banco, config as C, crypto, db, feeds, ig, llm, marca as marca_mod, midia, render, settings, telegram, voz
+from . import banco, config as C, crypto, db, distribuicao, feeds, ig, llm, marca as marca_mod, meta_ai, midia, render, settings, tarefas, telegram, vectorcraft, voz
+from .agentes import OrquestradorAgente
+
+orquestrador = OrquestradorAgente()
 
 RUNNING: set[int] = set()
 MAX_FALHAS = 3
@@ -23,6 +26,52 @@ def perfil(pid: int) -> dict | None:
     return db.one("SELECT * FROM perfis WHERE id=?", (pid,))
 
 
+def excluir_perfil(pid: int) -> bool:
+    """Exclui um perfil e todos os seus dados associados (posts, feeds exclusivos, arquivos de mídia, logo e configurações)."""
+    p = perfil(pid)
+    if not p:
+        return False
+
+    RUNNING.discard(pid)
+
+    # Remove arquivos de mídia gerados para os posts deste perfil
+    posts = db.q("SELECT arquivo, arquivos, capa FROM posts WHERE perfil_id=?", (pid,))
+    for po in posts:
+        for arq in [po.get("arquivo"), po.get("capa")]:
+            if arq:
+                try:
+                    (C.CARDS / arq).unlink(missing_ok=True)
+                    (C.PUBLIC / arq).unlink(missing_ok=True)
+                except Exception:
+                    pass
+        if po.get("arquivos"):
+            try:
+                for arq in json.loads(po["arquivos"]):
+                    (C.CARDS / arq).unlink(missing_ok=True)
+                    (C.PUBLIC / arq).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    # Remove logotipo associado ao perfil
+    try:
+        marca_mod.remover_logo(pid)
+    except Exception:
+        pass
+
+    # Limpa registros no banco de dados vinculados ao perfil
+    db.x("DELETE FROM publicacoes_canais WHERE post_id IN (SELECT id FROM posts WHERE perfil_id=?)", (pid,))
+    db.x("DELETE FROM aprendizados WHERE perfil_id=?", (pid,))
+    db.x("DELETE FROM canais_distribuicao WHERE perfil_id=?", (pid,))
+    db.x("DELETE FROM eventos WHERE perfil_id=?", (pid,))
+    db.x("DELETE FROM feeds WHERE perfil_id=?", (pid,))
+    db.x("DELETE FROM posts WHERE perfil_id=?", (pid,))
+    db.x("DELETE FROM settings WHERE k=?", (f"metatmp:{pid}",))
+    db.x("DELETE FROM perfis WHERE id=?", (pid,))
+
+    return True
+
+
+
 def conexao_do_perfil(p: dict) -> dict | None:
     """Conexão de LLM do perfil; sem escolha própria, usa a padrão. A chave volta descriptografada."""
     con = db.one("SELECT * FROM llm_conexoes WHERE id=?", (p["llm_conexao_id"],)) if p.get("llm_conexao_id") else None
@@ -33,6 +82,14 @@ def conexao_do_perfil(p: dict) -> dict | None:
         except Exception:
             con = {**con, "api_key": ""}
     return con
+
+
+def conexao_do_modulo(modulo: str, p: dict | None = None) -> dict | None:
+    """Conexão de LLM configurada especificamente para o módulo funcional ('chat', 'legenda', 'noticias', 'roteiro').
+    Permite rodar múltiplos modelos simultâneos alocados por tarefa funcional.
+    """
+    from . import hardware
+    return hardware.obter_conexao_modulo(modulo, p)
 
 
 def post(post_id: int) -> dict | None:
@@ -51,10 +108,30 @@ def _claim(post_id: int, de: tuple, para: str) -> bool:
                 (para, db.now(), post_id, *de)) == 1
 
 
+def _tentar_apagar(caminho: Path, tentativas: int, intervalo: float) -> bool:
+    for i in range(tentativas):
+        try:
+            caminho.unlink(missing_ok=True)
+            return True
+        except PermissionError:  # Windows não apaga arquivo ainda aberto (antivírus, indexador, ffmpeg acabando de soltar)
+            if i < tentativas - 1:
+                time.sleep(intervalo)
+    return False
+
+
 def _apagar(*nomes) -> None:
+    """Apaga arquivos de CARDS. Síncrona e com espera: em código assíncrono chame por `_apagar_async` (thread).
+    Se o Windows ainda estiver com o arquivo preso depois de ≈5 s, uma thread de fundo continua tentando por 2 min."""
     for n in nomes:
         if n and re.fullmatch(r"[0-9a-f]{32}\.(jpg|mp4)", n):
-            (C.CARDS / n).unlink(missing_ok=True)
+            caminho = C.CARDS / n
+            if not _tentar_apagar(caminho, 10, 0.5):
+                logging.getLogger(__name__).warning("arquivo %s em uso: vou tentar apagar em segundo plano", n)
+                threading.Thread(target=_tentar_apagar, args=(caminho, 60, 2.0), daemon=True).start()
+
+
+async def _apagar_async(*nomes) -> None:
+    await asyncio.to_thread(_apagar, *nomes)
 
 
 def arquivos_do_post(po: dict) -> list[str]:
@@ -71,7 +148,7 @@ def _apagar_post(po: dict) -> None:
 
 
 async def gerar(perfil_id: int, n: int = 1, origem: str = "manual") -> int:
-    """Busca notícias novas e cria até n posts aguardando aprovação. Devolve quantos deram certo."""
+    """Gera até n posts aguardando aprovação (prioriza Meta AI + Técnica Blow Up no Instagram quando configurado)."""
     if perfil_id in RUNNING:
         return 0
     RUNNING.add(perfil_id)
@@ -79,7 +156,56 @@ async def gerar(perfil_id: int, n: int = 1, origem: str = "manual") -> int:
         p = perfil(perfil_id)
         if not p:
             return 0
-        fl = db.q("SELECT * FROM feeds WHERE ativo=1 AND (perfil_id IS NULL OR perfil_id=?)", (perfil_id,))
+        if settings.segredo("meta_ai_cookies"):
+            con = conexao_do_perfil(p) or {}
+            feitos = 0
+            for _ in range(max(1, n)):
+                try:
+                    pedido_auto = (
+                        f"Pesquise no Instagram para @{p['handle'].lstrip('@')} a tendência mais quente de hoje "
+                        f"em {p.get('palavras_chave') or 'Private AI, Segurança Eletrônica e Infraestrutura'} "
+                        f"e crie 1 post viral completo usando a Técnica Blow Up."
+                    )
+                    res_est = await orquestrador.estudio.criar_post(
+                        con=con,
+                        perfil=p,
+                        pedido=pedido_auto,
+                        formato_forcado="feed",
+                    )
+                    res_orq = {
+                        "acao": res_est.get("formato", "feed"),
+                        "dados": res_est,
+                        "resposta_telegram": res_est.get("legenda", ""),
+                    }
+                    chat_id_tg = str(p.get("telegram_chat_id") or "")
+                    if chat_id_tg and telegram.ativo():
+                        await _criar_e_enviar_post_agente(p, chat_id_tg, res_orq)
+                    else:
+                        db.x(
+                            "INSERT INTO posts(perfil_id, estado, noticia_titulo, fonte, texto, json_llm, manchete, reacao, legenda, arquivo, formato, criado_em, atualizado_em) "
+                            "VALUES(?, 'aguardando_aprovacao', ?, 'Meta AI Blow Up', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                p["id"],
+                                (res_est.get("manchete") or "Post Blow Up")[:120],
+                                res_est.get("corpo") or "",
+                                json.dumps(res_est, ensure_ascii=False),
+                                res_est.get("manchete") or "",
+                                res_est.get("corpo") or "",
+                                res_est.get("legenda") or "",
+                                res_est.get("arquivo_card") or "",
+                                res_est.get("formato", "feed"),
+                                db.now(),
+                                db.now(),
+                            ),
+                        )
+                    feitos += 1
+                except Exception as e:
+                    db.log(perfil_id, None, "falhou", str(e)[:300])
+            return feitos
+
+        fl = db.q("SELECT * FROM feeds WHERE ativo=1 AND perfil_id=?", (perfil_id,))
+        if not fl:
+            fl = db.q("SELECT * FROM feeds WHERE ativo=1 AND (perfil_id IS NULL OR perfil_id=?)", (perfil_id,))
         usadas = {r["noticia_url"] for r in db.q("SELECT noticia_url FROM posts WHERE perfil_id=?", (perfil_id,))}
         palavras = [s.strip() for s in p["palavras_chave"].split(",") if s.strip()]
         cands = await feeds.candidatas(fl, palavras, p["max_idade_horas"], usadas)
@@ -112,7 +238,8 @@ async def _processar(post_id: int, p: dict, temperature: float, destino: str = "
             ex = await feeds.extrair(po["noticia_url"])
             _set(post_id, "extraido", texto=ex["texto"], noticia_titulo=po["noticia_titulo"] or ex["titulo"])
             po = post(post_id)
-        con = conexao_do_perfil(p)
+        modulo = "noticias" if po.get("noticia_url") else "legenda"
+        con = conexao_do_modulo(modulo, p)
         if not con or not con["modelo"]:
             raise ValueError("nenhuma conexão de LLM com modelo escolhido: configure em LLM")
         noticia = {"titulo": po["noticia_titulo"], "fonte": po["fonte"], "url": po["noticia_url"], "texto": po["texto"]}
@@ -127,7 +254,7 @@ async def _processar(post_id: int, p: dict, temperature: float, destino: str = "
             arquivo, estourou = await render.card(res["manchete_curta"], res["minha_reacao"], po["fonte"] or res["fonte"],
                                                   p["handle"], p["nome"], formato, print_uri, p)
             if estourou:
-                _apagar(arquivo)
+                await _apagar_async(arquivo)
                 feedback, arquivo = "minha_reacao não coube no card, encurte", None
                 continue
             break
@@ -167,7 +294,7 @@ async def refazer(post_id: int) -> bool:
     destino = "rascunho" if po["estado"] in ("rascunho", "agendado") else "aguardando_aprovacao"
     ok = await _processar(post_id, p, temperature=0.95, destino=destino)
     if ok:
-        _apagar_post(po)
+        await asyncio.to_thread(_apagar_post, po)
         db.log(p["id"], post_id, "refeito")
         if po["tg_message_id"] and p["telegram_chat_id"]:
             await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], "Refeito. Nova versão abaixo.")
@@ -206,7 +333,17 @@ async def aprovar(post_id: int, origem: str = "painel") -> bool:
                                       [m for m in (po["mencoes"] or "").split(",") if m], f"{base}/{capa}" if capa else "")
         _set(post_id, "publicado", media_id=media, erro=None, agendado_para=None)
         db.log(p["id"], post_id, "publicado", f"{origem} media={media}")
-        resultado = "✅ Publicado."
+        resultado = "✅ Publicado no Instagram."
+
+        # Distribuição Multiplataforma Local (Threads, YouTube Shorts, LinkedIn, TikTok)
+        try:
+            res_multi = await distribuicao.publicar_multiplataforma(post_id, p["id"], base)
+            if res_multi.get("sucessos"):
+                resultado = f"✅ Publicado no Instagram, {', '.join(res_multi['sucessos'])}."
+            if res_multi.get("falhas"):
+                resultado += f" (⚠️ Falhas: {'; '.join(res_multi['falhas'])})"
+        except Exception as e_dist:
+            resultado += f" (⚠️ Falha na distribuição multi: {str(e_dist)[:100]})"
     except Exception as e:
         _set(post_id, "falhou", erro=str(e)[:400])
         db.log(p["id"], post_id, "falhou_publicar", str(e))
@@ -223,7 +360,7 @@ async def descartar(post_id: int, origem: str = "painel") -> bool:
     po = post(post_id)
     if not po or not _claim(post_id, ESTADOS_ABERTOS, "descartado"):
         return False
-    _apagar_post(po)
+    await asyncio.to_thread(_apagar_post, po)
     p = perfil(po["perfil_id"])
     db.log(p["id"], post_id, "descartado", origem)
     if po["tg_message_id"] and p["telegram_chat_id"]:
@@ -290,7 +427,7 @@ async def acao_telegram(acao: str, post_id: int, chat_id: str) -> None:
         await telegram.enviar_botoes(chat_id, f"Quando publicar o post #{post_id}? (fuso {settings.tz()})",
                                      [[(rot(q), f"as:{post_id * 10 + i}")] for i, q in enumerate(slots)])
     elif acao == "ia":  # versão em vídeo por IA (demora minutos: roda em segundo plano)
-        asyncio.create_task(animar_post(post_id))
+        tarefas.disparar(animar_post(post_id))
     elif acao == "ad":  # copia o post para o outro formato (feed <-> story)
         destino = "story" if po["formato"] == "feed" else "feed"
         try:
@@ -299,6 +436,107 @@ async def acao_telegram(acao: str, post_id: int, chat_id: str) -> None:
         except Exception as e:
             db.log(p["id"], post_id, "adaptar_falhou", str(e))
             await telegram.avisar(chat_id, f"Não consegui adaptar: {str(e)[:200]}")
+    elif acao == "tpl":  # alternar estilo visual do template (cyber_glass -> editorial_bold -> alerta_critico -> clean_minimalist)
+        await alternar_estilo_post(post_id, chat_id)
+
+
+async def alternar_estilo_post(post_id: int, chat_id: str, estilo_forcado: str | None = None) -> bool:
+    """Alterna o layout do post entre os 6 novos layouts dinâmicos (editorial, impacto_foto, lista, dado, alerta, citacao)
+    e re-renderiza o card imediatamente com o novo design."""
+    import base64
+    po = post(post_id)
+    if not po or po["formato"] not in ("feed", "story"):
+        return False
+    p = perfil(po["perfil_id"])
+    if not p:
+        return False
+
+    ordem = ["editorial", "impacto_foto", "lista", "dado", "alerta", "citacao"]
+    layout_atual = po.get("angulo") or "editorial"
+    if layout_atual not in ordem:
+        layout_atual = "editorial"
+
+    if estilo_forcado and estilo_forcado in ordem:
+        proximo_layout = estilo_forcado
+    else:
+        proximo_layout = ordem[(ordem.index(layout_atual) + 1) % len(ordem)]
+
+    manchete = po["manchete"] or po["noticia_titulo"] or po["texto"] or "Destaque"
+    reacao = po["reacao"] or po["texto"] or ""
+    formato = po["formato"]
+
+    # Cores e selos contextualizados ao layout
+    paletas_layout = {
+        "editorial": {"fundo": "#0d1117", "texto_primario": "#f8fafc", "texto_secundario": "#94a3b8", "destaque": "#f59e0b", "acento": "rgba(245, 158, 11, 0.12)", "borda": "rgba(255, 255, 255, 0.1)"},
+        "impacto_foto": {"fundo": "#080a0f", "texto_primario": "#ffffff", "texto_secundario": "#94a3b8", "destaque": "#00f0ff", "acento": "rgba(0, 240, 255, 0.15)", "borda": "rgba(255, 255, 255, 0.12)"},
+        "lista": {"fundo": "#080a0f", "texto_primario": "#ffffff", "texto_secundario": "#94a3b8", "destaque": "#10b981", "acento": "rgba(16, 185, 129, 0.12)", "borda": "rgba(255, 255, 255, 0.1)"},
+        "dado": {"fundo": "#080a0f", "texto_primario": "#ffffff", "texto_secundario": "#94a3b8", "destaque": "#00f0ff", "acento": "rgba(0, 240, 255, 0.15)", "borda": "rgba(255, 255, 255, 0.12)"},
+        "alerta": {"fundo": "#0a0709", "texto_primario": "#ffffff", "texto_secundario": "#cbd5e1", "destaque": "#ef4444", "acento": "rgba(239, 68, 68, 0.16)", "borda": "rgba(239, 68, 68, 0.28)"},
+        "citacao": {"fundo": "#0a0d14", "texto_primario": "#ffffff", "texto_secundario": "#94a3b8", "destaque": "#38bdf8", "acento": "rgba(56, 189, 248, 0.12)", "borda": "rgba(255, 255, 255, 0.1)"},
+    }
+    paleta = paletas_layout.get(proximo_layout, paletas_layout["editorial"])
+
+    selo_uri = None
+    if proximo_layout == "alerta":
+        svg_s = vectorcraft.criar_badge_vetorial("ALERTA", "alerta_vermelho", "URGENTE", 560 if formato == "story" else 480, 130)
+        selo_uri = f"data:image/svg+xml;base64,{base64.b64encode(svg_s.encode('utf-8')).decode('ascii')}"
+
+    meta_llm = {}
+    if po.get("json_llm"):
+        try:
+            meta_llm = json.loads(po["json_llm"])
+        except Exception:
+            meta_llm = {}
+    copy_meta = meta_llm.get("copy") if isinstance(meta_llm.get("copy"), dict) else {}
+    cta_padrao = "Responda no Direct" if formato == "story" else "Salve este post"
+    cta_final = copy_meta.get("cta_texto") or cta_padrao
+    if formato == "story" and "legenda" in cta_final.lower():
+        cta_final = "Responda no Direct"
+
+    try:
+        novo_arq, _ = await render.render_design(
+            layout=proximo_layout,
+            formato=formato,
+            manchete=manchete,
+            paragrafos=reacao,
+            handle=p["handle"],
+            nome=p["nome"],
+            palavras_destaque=copy_meta.get("palavras_destaque"),
+            itens=copy_meta.get("itens_card"),
+            dado=copy_meta.get("dado_destaque"),
+            dado_legenda=copy_meta.get("dado_legenda"),
+            frase_impacto=copy_meta.get("frase_impacto"),
+            cta_texto=cta_final,
+            post_tipo_label="Story" if formato == "story" else "Post de Feed",
+            selo_uri=selo_uri,
+            paleta=paleta,
+            p=p,
+            pid=post_id,
+        )
+    except Exception as e:
+        await telegram.avisar(chat_id, f"Não foi possível trocar o estilo: {str(e)[:200]}")
+        return False
+
+    db.x("UPDATE posts SET arquivo=?, angulo=?, atualizado_em=? WHERE id=?",
+         (novo_arq, proximo_layout, db.now(), post_id))
+    db.log(p["id"], post_id, "estilo_alterado", proximo_layout)
+
+    nomes_formatados = {
+        "editorial": "Editorial Bold (Tipografia & Sofisticação)",
+        "impacto_foto": "Impacto Visual (Foto & Manchete Gigante)",
+        "lista": "Lista Estratégica (Passos & Alta Retenção)",
+        "dado": "Dado de Impacto (Estatística Central)",
+        "alerta": "Alerta Crítico (Breaking News / Urgência)",
+        "citacao": "Citação Autoral (Frase Forte & Assinatura)",
+    }
+    aviso = f"🎨 *Layout Atualizado:* `{nomes_formatados.get(proximo_layout, proximo_layout.upper())}`\n• Novo design renderizado com sucesso!"
+    legenda = "" if formato == "story" else (po["legenda"] or "")
+    try:
+        mid = await telegram.enviar_card(chat_id, C.CARDS / novo_arq, post_id, legenda or f"({formato.title()} {proximo_layout})", aviso)
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, post_id))
+    except Exception as e:
+        db.log(p["id"], post_id, "telegram_falhou", str(e))
+    return True
 
 
 # ---------------- pauta do dia e agenda local ----------------
@@ -315,7 +553,9 @@ async def pauta(perfil_id: int, n_noticias: int = 3, n_variacoes: int = 2, forma
             return 0
         n_noticias, n_variacoes = max(1, min(n_noticias, 10)), max(1, min(n_variacoes, len(ANGULOS)))
         formato = formato if formato in ("feed", "story") else "feed"
-        fl = db.q("SELECT * FROM feeds WHERE ativo=1 AND (perfil_id IS NULL OR perfil_id=?)", (perfil_id,))
+        fl = db.q("SELECT * FROM feeds WHERE ativo=1 AND perfil_id=?", (perfil_id,))
+        if not fl:
+            fl = db.q("SELECT * FROM feeds WHERE ativo=1 AND (perfil_id IS NULL OR perfil_id=?)", (perfil_id,))
         usadas = {r["noticia_url"] for r in db.q("SELECT noticia_url FROM posts WHERE perfil_id=? AND noticia_url IS NOT NULL", (perfil_id,))}
         palavras = [s.strip() for s in p["palavras_chave"].split(",") if s.strip()]
         cands = await feeds.candidatas(fl, palavras, p["max_idade_horas"], usadas)
@@ -414,14 +654,23 @@ async def publicar_agendados() -> int:
     """Publica o que já passou da hora marcada. Chamado pelo agendador a cada ~30 s."""
     vencidos = db.q("SELECT id FROM posts WHERE estado='agendado' AND agendado_para<=? ORDER BY agendado_para", (db.now(),))
     for r in vencidos:
-        asyncio.create_task(aprovar(r["id"], "agenda"))
+        tarefas.disparar(aprovar(r["id"], "agenda"))
     return len(vencidos)
 
 
 # ---------------- foto/vídeo enviados pelo Telegram ----------------
-AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
+AJUDA = ("Eu sou seu assistente de conteúdo e orquestrador de agentes. Converse comigo em texto livre:\n"
+         "• Técnica Blow Up: envie qualquer link do Instagram (ou /blowup <link>) para o Meta AI no navegador dissecar o gancho e recriar o post para você\n"
          "• Montar/rever o perfil: /perfil (eu faço perguntas e proponho o texto; você confirma)\n"
          "• Ideias de posts: /ideias, ou peça um tema\n"
+         "• Carrossel: /carrossel <ideia> (planeja sequência com capa, loops e CTA)\n"
+         "• Selos e Badges (VectorCraft): /badge <texto> [estilo] (ex: /badge NOVO neon_ciano | Exclusivo)\n"
+         "• Overlays Seguros (VectorCraft): /overlay <titulo> | <subtitulo> (respeita safe-zones de Reels/Shorts)\n"
+         "• Arte Vetorial Livre (VectorCraft): /arte <descrição> (cria composições visuais com formas e brilho)\n"
+         "• Extrair Gancho Viral: /hook <texto_ou_roteiro> (desconstrói a fórmula e adapta para você)\n"
+         "• Hashtags SEO: /hashtags <tema_ou_texto> (conjunto de 3 a 5 tags calibradas)\n"
+         "• Auditar texto: /auditar <texto> (score de robô/IA e clichês)\n"
+         "• Humanizar texto: /humanizar <texto> (remove vícios de IA e emojis excessivos)\n"
          "• Gerar: “faz um carrossel de 6 slides sobre X”, “um story sobre Y”, “2 versões para testar”\n"
          "• Foto: é só mandar (pode ser um monte de uma vez). Eu olho a imagem, escrevo a legenda e uma frase sobre a foto, ponho trilha e sugiro o horário; você só dá OK. Escrever “feed”, “story” ou “reel” na legenda troca o formato\n"
          "• Vídeo com mais de 30 s: eu entrego um Reel e um Story, os dois legendados, com thumb e legenda do Instagram prontas (escrever story/reel/feed na legenda faz só um)\n"
@@ -429,6 +678,7 @@ AJUDA = ("Eu sou seu assistente de conteúdo. Converse comigo em texto livre:\n"
          "• Vídeo: “corta os silêncios”, “legenda animada” (precisa de Transcrição em Conexões). Foto: “narra: …” ou só “com narração” (precisa de Voz em Conexões)\n"
          "• Marca: “meu fundo é azul escuro #0b1f3a e o destaque é amarelo”; logotipo: envie o arquivo com a legenda “logo”\n"
          "• Citação: “faz uma citação sobre X” (com “foto de fundo” usa banco de imagens); meme: “meme sobre X”, ou envie sua foto com a legenda “meme: …”\n"
+         "• Postagem simultânea: /canais (vê os canais ativos: Threads, YouTube Shorts, LinkedIn, TikTok)\n"
          "• Botão 🕒 Agendar em cada card escolhe o próximo horário livre do perfil\n"
          "• Botão 📐 em cada card copia o post para Story/Feed sem cortar a imagem; 🎬 transforma a sua foto em vídeo por IA (Higgsfield, gasta créditos). Na legenda da foto: “vídeo com IA”\n"
          "• /novo zera a conversa")
@@ -438,7 +688,7 @@ async def _refazer_legenda(po: dict) -> bool:
     p = perfil(po["perfil_id"])
     if po["estado"] not in ESTADOS_ABERTOS or po["formato"] == "story" or not po["texto"]:
         return False
-    con = conexao_do_perfil(p)
+    con = conexao_do_modulo("legenda", p)
     try:
         leg = await llm.legenda_midia(con, p["contexto_md"], po["texto"], "vídeo" if po["arquivo"].endswith(".mp4") else "foto", 0.95)
     except Exception as e:
@@ -487,7 +737,7 @@ async def _video_ia(p: dict, imagem, pedido: str) -> Path:
     base = settings.base_url()
     if not base:
         raise banco.BancoError("URL pública não configurada (Conexões): o Higgsfield precisa buscar a foto por ela")
-    con = conexao_do_perfil(p)
+    con = conexao_do_modulo("roteiro", p)
     if con and con["modelo"]:
         try:
             prompt = await llm.prompt_movimento(con, pedido or "movimento sutil e cinematográfico")
@@ -506,39 +756,63 @@ async def _video_ia(p: dict, imagem, pedido: str) -> Path:
 
 
 async def animar_post(post_id: int) -> int | None:
-    """Botão 🎬: cria uma versão em vídeo (por IA) de um post de foto sua. Feed vira Reel; Story continua Story."""
+    """Botão 🎬: cria uma versão em vídeo 9:16 (.mp4) de um post.
+    Se o Higgsfield estiver configurado, usa IA image-to-video; caso contrário, usa o motor local de Motion & Áudio (Ken Burns + Overlay + Trilha)."""
     po = post(post_id)
-    if not po or po["fonte"] != "Telegram" or not (po["arquivo"] or "").endswith(".jpg") or po["formato"] not in ("feed", "story"):
+    arq_atual = po["arquivo"] if po else ""
+    if not po or not arq_atual or not arq_atual.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         return None
-    if post_id in _IA_EM_CURSO or not (C.CARDS / po["arquivo"]).exists():
+    if post_id in _IA_EM_CURSO or not (C.CARDS / arq_atual).exists():
         return None
     p = perfil(po["perfil_id"])
     _IA_EM_CURSO.add(post_id)
-    video = None
+    video_tmp = None
+    fundo_tmp = None
+    overlay_tmp = None
     try:
-        if p["telegram_chat_id"] and telegram.ativo():
-            await telegram.avisar(p["telegram_chat_id"], f"🎬 Gerando o vídeo por IA do post #{post_id}. Pode levar alguns minutos e gasta créditos do Higgsfield.")
-        video = await _video_ia(p, C.CARDS / po["arquivo"], po["texto"] or po["noticia_titulo"] or "")
         formato = "story" if po["formato"] == "story" else "reel"
-        arquivo = await midia.video(video, formato)
+        usa_higgs = bool(banco.higgs_chave() and settings.base_url())
+        if usa_higgs:
+            if p["telegram_chat_id"] and telegram.ativo():
+                await telegram.avisar(p["telegram_chat_id"], f"🎬 Gerando o vídeo por IA (Higgsfield) do post #{post_id}...")
+            video_tmp = await _video_ia(p, C.CARDS / arq_atual, po["texto"] or po["noticia_titulo"] or "")
+            arquivo = await midia.video(video_tmp, formato)
+        else:
+            if p["telegram_chat_id"] and telegram.ativo():
+                await telegram.avisar(p["telegram_chat_id"], f"🎬 Renderizando Vídeo Animado 9:16 (Motion + Trilha Sonora) do post #{post_id}...")
+            musica_v = midia.escolher_musica() or await midia.trilha_padrao()
+            manchete_v = po["manchete"] or po["noticia_titulo"] or po["texto"] or "Destaque"
+            # Tenta buscar uma fotografia limpa do tema para animar no fundo e sobrepor o título com fade
+            src_animar = C.CARDS / arq_atual
+            try:
+                fundo_tmp = C.DATA / "tmp" / f"anim_bg_{uuid_hex()}.jpg"
+                await banco.baixar_uma(manchete_v, fundo_tmp, orientacao="portrait")
+                if fundo_tmp.exists():
+                    src_animar = fundo_tmp
+                    overlay_tmp = await render.overlay_story(manchete_v, p["handle"], p, altura=1920)
+            except Exception:
+                src_animar = C.CARDS / arq_atual
+                overlay_tmp = None
+            arquivo = await midia.story_animado(src_animar, musica=musica_v, overlay=overlay_tmp, dur=8.0)
     except Exception as e:
         db.log(p["id"], post_id, "video_ia_falhou", str(e))
         if p["telegram_chat_id"] and telegram.ativo():
-            await telegram.avisar(p["telegram_chat_id"], f"Não consegui gerar o vídeo por IA: {str(e)[:200]}")
+            await telegram.avisar(p["telegram_chat_id"], f"Não consegui gerar o vídeo: {str(e)[:200]}")
         return None
     finally:
         _IA_EM_CURSO.discard(post_id)
-        if video:
-            video.unlink(missing_ok=True)
+        for t in (video_tmp, fundo_tmp, Path(overlay_tmp) if overlay_tmp else None):
+            if t:
+                t.unlink(missing_ok=True)
     legenda = "" if formato == "story" else po["legenda"]
-    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,mencoes,criado_em,atualizado_em)"
-               " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-               (po["perfil_id"], "aguardando_aprovacao", po["noticia_titulo"], "Telegram", po["texto"], po["reacao"], legenda, arquivo, formato,
+    pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,manchete,legenda,arquivo,formato,mencoes,criado_em,atualizado_em)"
+               " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+               (po["perfil_id"], "aguardando_aprovacao", po["noticia_titulo"], "Telegram", po["texto"], po["reacao"], po["manchete"], legenda, arquivo, formato,
                 po["mencoes"], db.now(), db.now()))
     db.log(po["perfil_id"], pid, "video_ia", f"#{post_id} -> {formato}")
     if p["telegram_chat_id"] and telegram.ativo():
-        mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / arquivo, pid, legenda or "(Story sem legenda)",
-                                         f"🎬 Vídeo por IA do post #{post_id}")
+        mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / arquivo, pid, legenda or "(Story Animado)",
+                                         (f"🎬 Vídeo por IA do post #{post_id} pronto!" if usa_higgs else f"🎬 Vídeo animado 9:16 do post #{post_id} pronto!"))
         db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
     return pid
 
@@ -554,7 +828,7 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
     corte de silêncio, legendas animadas (Whisper) e narração (voz local). Ajusta o formato, escreve a legenda e envia para aprovação."""
     formato, descricao, sem_musica = _destino(tipo, texto)
     ped = _pedidos(texto)
-    con = conexao_do_perfil(p)
+    con = conexao_do_modulo("roteiro" if formato in ("reel", "story") else "legenda", p)
     # esteira: toda foto sai pronta (legenda, frase sobre a imagem, trilha). O padrão do perfil vale quando o autor não escreveu story/reel/feed.
     auto = tipo == "foto" and p["esteira"] in ("reel", "feed", "story")
     if auto and not re.search(r"(?i)\b(story|stories|reels?|feed)\b", texto or ""):
@@ -678,7 +952,7 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
         if palavras and ped["legendar"] and arquivo.endswith(".mp4"):
             try:
                 com_legenda = await midia.legendar(arquivo, palavras, marca_mod.carregar(p)["acento"])
-                _apagar(arquivo)
+                await _apagar_async(arquivo)
                 arquivo = com_legenda
                 extras.append("legendas animadas")
             except midia.MidiaError as e:
@@ -712,7 +986,8 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
         if auto and formato == "feed":
             avisos.append("ℹ️ Feed de foto não leva música (o Instagram só aceita trilha em vídeo). Use “reel” para ter trilha.")
         resumo = formato.upper() + (" · animado" if animado and "narrado" not in extras else "") + (f" · trilha: {musica.stem}" if musica else "") + \
-            (f" · texto na tela: “{texto_tela}”" if texto_tela else "") + "".join(f" · {x}" for x in extras)
+            (f" · texto na tela: “{texto_tela}”" if texto_tela else "") + "".join(f" · {x}" for x in extras) + \
+            (f" · horário sugerido: {local(sugestao)}" if sugestao else "")
         mid = await telegram.enviar_card(p["telegram_chat_id"], C.CARDS / arquivo, pid,
                                          (legenda or "(sem legenda)") + f"\n\n[{resumo}]", "\n".join(avisos))
         db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
@@ -786,7 +1061,7 @@ async def criar_video_longo(p: dict, src, texto: str) -> list[int]:
     (se houver Transcrição), mais a thumb do Reel com um título que faz sentido com o vídeo, e a legenda do Instagram escrita a partir da fala."""
     ped = _pedidos(texto)
     _, descricao, sem_musica = _destino("video", texto)
-    con = conexao_do_perfil(p)
+    con = conexao_do_modulo("roteiro", p)
     avisos: list[str] = []
     info = await midia.sondar(src)
     dur = info["duracao"]
@@ -833,7 +1108,7 @@ async def criar_video_longo(p: dict, src, texto: str) -> list[int]:
             if palavras:
                 try:
                     com = await midia.legendar(arq, palavras, acento)
-                    _apagar(arq)
+                    await _apagar_async(arq)
                     arq = com
                 except midia.MidiaError as e:
                     avisos.append(f"⚠️ Legendas animadas falharam no {fmt}: {str(e)[:120]}")
@@ -880,9 +1155,30 @@ async def criar_video_longo(p: dict, src, texto: str) -> list[int]:
 
 
 async def mensagem_telegram(msg: dict) -> None:
-    chat_id = str(msg.get("chat", {}).get("id", ""))
+    chat = msg.get("chat") or {}
+    chat_id = str(chat.get("id", ""))
+    nome = chat.get("first_name", "") + (" " + chat.get("last_name", "") if chat.get("last_name") else "")
+    username = chat.get("username", "")
+    if chat_id:
+        telegram.registrar_chat_recente(chat_id, nome, username)
+
     p = db.one("SELECT * FROM perfis WHERE telegram_chat_id=? AND telegram_chat_id!='' ORDER BY ativo DESC, id LIMIT 1", (chat_id,))
     if not p:
+        # Só responde com o Chat ID durante o onboarding (quando nenhum perfil tem Chat ID vinculado ainda)
+        algum_vinculado = db.one("SELECT 1 FROM perfis WHERE telegram_chat_id!='' LIMIT 1")
+        if not algum_vinculado:
+            nome_exibir = (nome or username or "Criador").strip()
+            saudacao = (
+                f"👋 Olá, {nome_exibir}!\n\n"
+                f"Recebi seu contato no bot do ic-ap.\n"
+                f"✅ *Seu Chat ID é:* `{chat_id}`\n\n"
+                f"👉 No painel de configuração, clique no botão *⚡ Detectar Meu Usuário Automaticamente* "
+                f"(ou cole o Chat ID `{chat_id}` no campo correspondente) para concluir sua conexão!"
+            )
+            try:
+                await telegram.avisar(chat_id, saudacao)
+            except Exception:
+                pass
         return  # só o dono do perfil manda conteúdo
     texto = msg.get("caption") or msg.get("text") or ""
     m = None
@@ -943,14 +1239,14 @@ async def _processar_texto(post_id: int, p: dict, temperature: float, destino: s
     formato = po["formato"]
     novos: list[str] = []
     try:
-        con = conexao_do_perfil(p)
+        con = conexao_do_modulo("roteiro" if formato in ("carrossel", "reels") else "legenda", p)
         if not con or not con["modelo"]:
             raise ValueError("nenhuma conexão de LLM com modelo escolhido: configure em LLM")
         ideia, estrategia = po["texto"], po["angulo"] or None
         n = n_slides or len(arquivos_do_post(po)) or 6
         feedback, res = None, None
         for _ in range(3):
-            _apagar(*novos)
+            await _apagar_async(*novos)
             novos = []
             try:
                 if formato == "carrossel":
@@ -999,7 +1295,7 @@ async def _processar_texto(post_id: int, p: dict, temperature: float, destino: s
                 db.log(p["id"], post_id, "telegram_falhou", str(e))
         return True
     except Exception as e:
-        _apagar(*novos)
+        await _apagar_async(*novos)
         msg = (str(e) or type(e).__name__)[:400]
         _set(post_id, "falhou", erro=msg)
         db.log(p["id"], post_id, "falhou", msg)
@@ -1041,7 +1337,7 @@ async def _refazer_texto(po: dict) -> bool:
     destino = "rascunho" if po["estado"] in ("rascunho", "agendado") else "aguardando_aprovacao"
     ok = await _processar_texto(po["id"], p, 0.95, destino)
     if ok:
-        _apagar_post(po)
+        await asyncio.to_thread(_apagar_post, po)
         db.log(p["id"], po["id"], "refeito")
         if po["tg_message_id"] and p["telegram_chat_id"]:
             await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], "Refeito. Nova versão abaixo.")
@@ -1054,7 +1350,7 @@ async def novas_hashtags(post_id: int) -> bool:
     if not po or po["estado"] not in ESTADOS_ABERTOS:
         return False
     p = perfil(po["perfil_id"])
-    con = conexao_do_perfil(p)
+    con = conexao_do_modulo("legenda", p)
     base = re.sub(r"(?:\s*#\w+)+\s*$", "", po["legenda"] or "").rstrip()
     try:
         tags = await llm.hashtags_para(con, p["contexto_md"], po["reacao"] or po["texto"] or base or po["manchete"] or "")
@@ -1086,24 +1382,501 @@ ATALHOS = {"/start": "Oi! Acabei de abrir o bot.",
            "/ideias": "Me dê ideias de posts para hoje, com base no meu perfil."}
 
 
+async def aplicar_skills_no_post(p: dict, chat_id: str, instrucao: str = "", post_id: int | None = None) -> bool:
+    """Aplica as skills do VectorCraft (selo/badge vetorial de alta conversão) e copy diretamente
+    no story ou post pendente, atualizando o card visualmente e reenviando para aprovação no Telegram."""
+    import base64
+
+    # 1. Localizar o post alvo
+    po = None
+    if post_id:
+        po = post(post_id)
+    if not po:
+        mencionou_story = bool(re.search(r"(?i)\bstor(y|ies)\b", instrucao))
+        if mencionou_story:
+            po = db.one("SELECT * FROM posts WHERE perfil_id=? AND formato='story' AND estado='aguardando_aprovacao' ORDER BY id DESC LIMIT 1", (p["id"],))
+            if not po:
+                po = db.one("SELECT * FROM posts WHERE perfil_id=? AND formato='story' ORDER BY id DESC LIMIT 1", (p["id"],))
+        if not po:
+            po = db.one("SELECT * FROM posts WHERE perfil_id=? AND estado='aguardando_aprovacao' ORDER BY id DESC LIMIT 1", (p["id"],))
+        if not po:
+            po = db.one("SELECT * FROM posts WHERE perfil_id=? ORDER BY id DESC LIMIT 1", (p["id"],))
+
+    if not po:
+        await telegram.avisar(chat_id, "Não encontrei nenhum post ou story recente para editar com as skills. Crie um post primeiro ou envie uma foto/ideia!")
+        return False
+
+    pid = po["id"]
+    formato = po["formato"] or "story"
+    manchete = po["manchete"] or po["noticia_titulo"] or po["texto"] or "Destaque"
+    reacao = po["reacao"] or po["texto"] or ""
+    fonte = po["fonte"] if po["fonte"] != "Texto" else ""
+
+    await telegram.digitando(chat_id)
+    await telegram.avisar(chat_id, f"🛠️ *Aplicando Skills no {formato.upper()} #{pid}*\n• Desenhando selo vetorial VectorCraft com tipografia de alta retenção...\n• Renderizando card em alta definição...")
+
+    # 2. Escolha e calibração do selo
+    conteudo_full = f"{instrucao} {manchete} {reacao}".lower()
+    if any(k in conteudo_full for k in ("alerta", "risco", "perigo", "lgpd", "jurídico", "juridico", "vazar", "urgente", "vazamento", "processo")):
+        estilo_badge = "alerta_vermelho"
+        if "lgpd" in conteudo_full:
+            badge_texto = "ALERTA LGPD"
+        elif "jurídico" in conteudo_full or "juridico" in conteudo_full or "processo" in conteudo_full:
+            badge_texto = "RISCO JURÍDICO"
+        elif "vaz" in conteudo_full:
+            badge_texto = "DADOS VAZADOS"
+        else:
+            badge_texto = "ALERTA CRÍTICO"
+        subtexto_badge = "RISCO REAL"
+    elif any(k in conteudo_full for k in ("ouro", "gold", "vip", "exclusivo", "premium", "faturamento", "dinheiro", "lucro", "empresa")):
+        estilo_badge = "neon_ouro"
+        badge_texto = "CONTEÚDO VIP"
+        subtexto_badge = "EXCLUSIVO"
+    elif any(k in conteudo_full for k in ("limpo", "clean", "minimalista", "pill")):
+        estilo_badge = "pill_clean"
+        badge_texto = "DESTAQUE"
+        subtexto_badge = "ESSENCIAL"
+    else:
+        estilo_badge = "neon_ciano"
+        if any(k in conteudo_full for k in ("ia local", "local", "privada", "privacidade")):
+            badge_texto = "IA PRIVADA"
+            subtexto_badge = "100% LOCAL"
+        elif "chatgpt" in conteudo_full:
+            badge_texto = "ALERTA CHATGPT"
+            subtexto_badge = "SEGURANÇA"
+        else:
+            badge_texto = "DESTAQUE 2026"
+            subtexto_badge = "ALTA RETENÇÃO"
+
+    # Se instrução tiver estilo explícito
+    for e in ("neon_ciano", "neon_ouro", "alerta_vermelho", "pill_clean"):
+        if e in instrucao.lower():
+            estilo_badge = e
+            break
+
+    # Se instrução tiver texto explícito após "badge" ou entre aspas
+    m_badge = re.search(r"badge\s*[:\s]\s*[\"']?([^\"'\n,]+)[\"']?", instrucao, re.IGNORECASE)
+    if m_badge:
+        badge_texto = m_badge.group(1).strip().upper()[:24]
+
+    # 3. Gerar SVG VectorCraft e converter para Data URI
+    larg_badge = 620 if formato == "story" else 540
+    alt_badge = 140
+    svg_badge = vectorcraft.criar_badge_vetorial(
+        texto=badge_texto,
+        estilo=estilo_badge,
+        subtexto=subtexto_badge,
+        largura=larg_badge,
+        altura=alt_badge,
+    )
+    b64_svg = base64.b64encode(svg_badge.encode("utf-8")).decode("ascii")
+    selo_uri = f"data:image/svg+xml;base64,{b64_svg}"
+
+    # 4. Renderizar o novo card com o selo e estilo de design correspondente
+    mapa_card_estilo = {
+        "alerta_vermelho": "alerta_critico",
+        "neon_ciano": "cyber_glass",
+        "neon_ouro": "editorial_bold",
+        "pill_clean": "clean_minimalist",
+    }
+    card_estilo = mapa_card_estilo.get(estilo_badge, "editorial_bold")
+
+    try:
+        novo_arquivo, estourou = await render.card(
+            manchete=manchete,
+            reacao=reacao,
+            fonte=fonte,
+            handle=p["handle"],
+            nome=p["nome"],
+            formato=formato,
+            print_uri=None,
+            p=p,
+            selo_uri=selo_uri,
+            estilo=card_estilo,
+        )
+    except Exception as e:
+        await telegram.avisar(chat_id, f"Não foi possível renderizar o card com o selo: {str(e)[:200]}")
+        return False
+
+    # 5. Atualizar registro no banco
+    db.x("UPDATE posts SET arquivo=?, angulo=?, estado='aguardando_aprovacao', atualizado_em=? WHERE id=?",
+         (novo_arquivo, card_estilo, db.now(), pid))
+    db.log(p["id"], pid, "skills_aplicadas", f"badge:{estilo_badge}:{badge_texto}:{card_estilo}")
+
+    # 6. Enviar card atualizado para o Telegram com botões interativos
+    legenda = "" if formato == "story" else (po["legenda"] or "")
+    aviso = f"✨ *{formato.upper()} #{pid} Editado com Skills VectorCraft!*\n• Tema: `{card_estilo.upper()}`\n• Selo: `{badge_texto}` ({estilo_badge})\n• Use o botão '🎨 Mudar Estilo' para alternar o layout!"
+    try:
+        mid = await telegram.enviar_card(chat_id, C.CARDS / novo_arquivo, pid, legenda or "(Story com Selo Vetorial)", aviso)
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+    except Exception as e:
+        db.log(p["id"], pid, "telegram_falhou", str(e))
+        await telegram.avisar(chat_id, f"Card gerado com sucesso ({novo_arquivo}), mas falhou ao enviar botões: {str(e)[:200]}")
+    return True
+
+
+async def _criar_e_enviar_post_agente(p: dict, chat_id: str, res: dict) -> bool:
+    """Transforma a saída estruturada dos agentes em posts no banco e cards com botões interativos no Telegram."""
+    acao = res.get("acao", "")
+    dados = res.get("dados") or {}
+    if not isinstance(dados, dict):
+        return False
+
+    # 1. CARROSSEL
+    if acao == "carrossel" and dados.get("slides"):
+        titulo = dados.get("titulo_carrossel", "Carrossel Estratégico")
+        slides = dados["slides"]
+        total = len(slides)
+        novos = []
+        for i, sl in enumerate(slides, 1):
+            tipo = "capa" if i == 1 else ("cta" if i == total else "conteudo")
+            try:
+                nome, estourou = await render.slide(sl["titulo"], sl.get("texto", ""), i, total, p["handle"], p["nome"], tipo, p)
+            except Exception:
+                svg_sl = vectorcraft.criar_slide_vetorial_carrossel(sl["titulo"], sl.get("texto", ""), i, total)
+                nome = f"slide_{p['id']}_{i}_{int(time.time()*1000)}.png"
+                await vectorcraft.renderizar_svg_para_png(svg_sl, C.CARDS / nome)
+            novos.append(nome)
+
+        legenda = dados.get("legenda_instagram", "")
+        pid = db.x(
+            "INSERT INTO posts(perfil_id, estado, noticia_titulo, fonte, texto, json_llm, manchete, reacao, legenda, arquivo, arquivos, formato, criado_em, atualizado_em) "
+            "VALUES(?, 'aguardando_aprovacao', ?, 'Telegram', ?, ?, ?, ?, ?, ?, ?, 'carrossel', ?, ?)",
+            (
+                p["id"],
+                titulo[:120],
+                titulo,
+                json.dumps(dados, ensure_ascii=False),
+                titulo,
+                "\n\n".join(f"{s['titulo']}: {s.get('texto','')}" for s in slides[1:]),
+                legenda,
+                novos[0] if novos else "",
+                json.dumps(novos),
+                db.now(),
+                db.now(),
+            )
+        )
+        caminhos = [C.CARDS / f for f in novos]
+        aviso = f"📑 *Carrossel #{pid} Gerado pelo Time de Especialistas!*\n• Total: {len(novos)} slides\n• Toque abaixo para postar ou agendar:"
+        mid = await telegram.enviar_carrossel(chat_id, caminhos, pid, legenda, aviso)
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+        db.log(p["id"], pid, "gerado_agente", f"carrossel:{len(novos)}_slides")
+        return True
+
+    # 2. REELS (Gera Vídeo .MP4 1080x1920 com Motion, Fundo Contextual, Overlay e Trilha Sonora)
+    elif acao in ("reels", "reel"):
+        cap = dados.get("caption") or {}
+        hook = cap.get("hook_125") or dados.get("manchete") or "Reels em Destaque"
+        cenas = cap.get("cenas_reels") or []
+        legenda = dados.get("legenda_final") or cap.get("legenda_completa") or dados.get("legenda") or ""
+        roteiro_txt = f"🎯 HOOK (0-3s): {hook}\n\n" + "\n".join(
+            f"🎬 Cena {c.get('cena', i+1)}: {c.get('fala', '')} (Visual: _{c.get('busca_visual', '')}_)"
+            for i, c in enumerate(cenas)
+        )
+        arq = dados.get("arquivo_png")
+        nome_overlay = Path(arq).name if arq else f"overlay_{int(time.time()*1000)}.png"
+        if not arq or not Path(arq).exists():
+            overlay_res = orquestrador.vector_art.gerar_overlay_reels(titulo=hook[:55], subtitulo="ROTEIRO & CENAS")
+            caminho_overlay = C.CARDS / nome_overlay
+            await orquestrador.vector_art.salvar_e_renderizar(overlay_res["svg"], caminho_overlay.stem, largura=1080, altura=1920)
+        else:
+            caminho_overlay = Path(arq)
+            if caminho_overlay.parent != C.CARDS:
+                shutil.copy2(caminho_overlay, C.CARDS / nome_overlay)
+
+        # Renderiza vídeo MP4 9:16 com fundo fotográfico contextualizado em movimento + overlay + trilha musical
+        arquivo_final_reel = nome_overlay
+        formato_db_reel = "reel"
+        fundo_reel_tmp = C.DATA / "tmp" / f"reel_bg_{uuid_hex()}.jpg"
+        ov_reel_tmp = None
+        try:
+            busca_v = (cenas[0].get("busca_visual") if cenas and isinstance(cenas[0], dict) else "") or hook
+            await banco.baixar_uma(busca_v, fundo_reel_tmp, orientacao="portrait")
+            ov_reel_tmp = await render.overlay_story(hook[:90], p["handle"], p, altura=1920)
+            musica_r = midia.escolher_musica() or await midia.trilha_padrao()
+            arquivo_final_reel = await midia.story_animado(
+                fundo_reel_tmp if fundo_reel_tmp.exists() else (C.CARDS / nome_overlay),
+                musica=musica_r,
+                overlay=ov_reel_tmp,
+                dur=8.5,
+            )
+        except Exception as e_vid:
+            db.log(p["id"], None, "reel_video_fallback", str(e_vid)[:180])
+            arquivo_final_reel = nome_overlay
+        finally:
+            fundo_reel_tmp.unlink(missing_ok=True)
+            if ov_reel_tmp:
+                Path(ov_reel_tmp).unlink(missing_ok=True)
+
+        pid = db.x(
+            "INSERT INTO posts(perfil_id, estado, noticia_titulo, fonte, texto, json_llm, manchete, reacao, legenda, arquivo, capa, formato, criado_em, atualizado_em) "
+            "VALUES(?, 'aguardando_aprovacao', ?, 'Telegram', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                p["id"],
+                hook[:120],
+                hook,
+                json.dumps(dados, ensure_ascii=False),
+                hook,
+                roteiro_txt,
+                legenda,
+                arquivo_final_reel,
+                nome_overlay if arquivo_final_reel.endswith(".mp4") else "",
+                formato_db_reel,
+                db.now(),
+                db.now(),
+            )
+        )
+        aviso = f"🎬 *Reels #{pid} (Vídeo 9:16 + Trilha + Motion) Pronto!*\n• Gancho: _{hook}_\n• Roteiro cena a cena + Legenda"
+        mid = await telegram.enviar_card(chat_id, C.CARDS / arquivo_final_reel, pid, f"{roteiro_txt}\n\n📝 Legenda:\n{legenda}", aviso)
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+        db.log(p["id"], pid, "gerado_agente", "reels")
+        return True
+
+    # 3. STORY ou FEED gerado pelo Estúdio Criativo (novo fluxo agêntico com 6 layouts e crítico visual)
+    elif acao in ("story", "feed") and dados.get("arquivo_card"):
+        nome_card = dados["arquivo_card"]
+        layout = dados.get("layout", "editorial")
+        manchete = dados.get("manchete") or dados.get("copy", {}).get("hook_125") or "Destaque"
+        corpo = dados.get("corpo") or manchete
+        legenda = dados.get("legenda") or dados.get("copy", {}).get("legenda_completa") or ""
+        score = dados.get("avaliacao_critico", {}).get("score", 8)
+        fmt_label = "Story (9:16)" if acao == "story" else "Post de Feed (4:5)"
+
+        pid = db.x(
+            "INSERT INTO posts(perfil_id, estado, noticia_titulo, fonte, texto, json_llm, manchete, reacao, legenda, arquivo, angulo, formato, criado_em, atualizado_em) "
+            "VALUES(?, 'aguardando_aprovacao', ?, 'Telegram', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                p["id"],
+                manchete[:120],
+                manchete,
+                json.dumps(dados, ensure_ascii=False),
+                manchete,
+                corpo,
+                legenda,
+                nome_card,
+                layout,
+                acao,
+                db.now(),
+                db.now(),
+            ),
+        )
+        aviso = (
+            f"🎨 *{fmt_label} #{pid} Criado pelo Estúdio Agêntico!*\n"
+            f"• Layout: `{layout.upper()}` | Avaliação Visual: *{score}/10*\n"
+            f"• Toque em '🎨 Mudar Estilo' para alternar o design ou '✅ Postar' para publicar:"
+        )
+        legenda_envio = legenda if acao != "story" else (legenda or "(Story 9:16)")
+        mid = await telegram.enviar_card(chat_id, C.CARDS / nome_card, pid, legenda_envio, aviso)
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+        db.log(p["id"], pid, "gerado_agente", f"{acao}:{layout}")
+        return True
+
+    # 4. STORY (fallback legado se não vier do Estúdio)
+    elif acao == "story":
+        cap = dados.get("caption") or {}
+        hook = cap.get("hook_125") or "Story em Destaque"
+        legenda = dados.get("legenda_final") or cap.get("legenda_completa") or ""
+        corpo = cap.get("corpo") or hook
+        cta = cap.get("cta") or "Toque no link da bio para saber mais"
+        prox_id = (db.valor("SELECT MAX(id) FROM posts") or 0) + 1
+        try:
+            nome_card, estourou = await render.card(
+                hook, corpo, "Story", p["handle"], p["nome"],
+                formato="story", p=p, pid=prox_id, cta_texto=cta, post_tipo_label="Story"
+            )
+        except Exception:
+            badge_res = orquestrador.vector_art.gerar_badge(texto="DESTAQUE", estilo="neon_ciano")
+            nome_card = f"story_{int(time.time()*1000)}.png"
+            await orquestrador.vector_art.salvar_e_renderizar(badge_res["svg"], Path(nome_card).stem, largura=1080, altura=1920)
+
+        pid = db.x(
+            "INSERT INTO posts(perfil_id, estado, noticia_titulo, fonte, texto, json_llm, manchete, reacao, legenda, arquivo, formato, criado_em, atualizado_em) "
+            "VALUES(?, 'aguardando_aprovacao', ?, 'Telegram', ?, ?, ?, ?, ?, ?, 'story', ?, ?)",
+            (p["id"], hook[:120], hook, json.dumps(dados, ensure_ascii=False), hook, corpo, legenda, nome_card, db.now(), db.now())
+        )
+        aviso = f"📱 *Story #{pid} (9:16) Gerado pelo Time de Especialistas!*\n• Visual 9:16 com Safe Zones\n• Toque abaixo para postar ou agendar:"
+        mid = await telegram.enviar_card(chat_id, C.CARDS / nome_card, pid, legenda or "(Story 9:16)", aviso)
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+        db.log(p["id"], pid, "gerado_agente", "story")
+        return True
+
+    # 5. FEED (fallback legado se não vier do Estúdio)
+    elif acao == "feed":
+        cap = dados.get("caption") or {}
+        hook = cap.get("hook_125") or "Insight em Destaque"
+        legenda = dados.get("legenda_final") or cap.get("legenda_completa") or ""
+        corpo = cap.get("corpo") or hook
+        cta = cap.get("cta") or "Toque no link da bio para saber mais"
+        prox_id = (db.valor("SELECT MAX(id) FROM posts") or 0) + 1
+        try:
+            nome_card, estourou = await render.card(
+                hook, corpo, "Feed", p["handle"], p["nome"],
+                formato="feed", p=p, pid=prox_id, cta_texto=cta, post_tipo_label="Post de Feed"
+            )
+        except Exception:
+            badge_res = orquestrador.vector_art.gerar_badge(texto="INSIGHT", estilo="neon_ouro")
+            nome_card = f"feed_{int(time.time()*1000)}.png"
+            await orquestrador.vector_art.salvar_e_renderizar(badge_res["svg"], Path(nome_card).stem, largura=1080, altura=1350)
+
+        pid = db.x(
+            "INSERT INTO posts(perfil_id, estado, noticia_titulo, fonte, texto, json_llm, manchete, reacao, legenda, arquivo, formato, criado_em, atualizado_em) "
+            "VALUES(?, 'aguardando_aprovacao', ?, 'Telegram', ?, ?, ?, ?, ?, ?, 'feed', ?, ?)",
+            (p["id"], hook[:120], hook, json.dumps(dados, ensure_ascii=False), hook, corpo, legenda, nome_card, db.now(), db.now())
+        )
+        aviso = f"📌 *Post de Feed #{pid} (4:5) Gerado pelo Time de Especialistas!*\n• Enquadramento 4:5\n• Copy com Gancho <125 chars e CTA único"
+        mid = await telegram.enviar_card(chat_id, C.CARDS / nome_card, pid, legenda, aviso)
+        db.x("UPDATE posts SET tg_message_id=? WHERE id=?", (mid, pid))
+        db.log(p["id"], pid, "gerado_agente", "feed")
+        return True
+
+    return False
+
+
 async def _texto_telegram(p: dict, chat_id: str, texto: str) -> None:
     cmd = texto.split()[0].lower().split("@")[0] if texto.startswith("/") else ""
+    t_lower = texto.lower()
+
     if cmd in ("/ajuda", "/help") or not texto:
         await telegram.avisar(chat_id, AJUDA)
+        return
+    elif cmd in ("/skills", "/skill"):
+        await telegram.avisar(chat_id, (
+            "🛠️ *Skills e Especialistas VectorCraft Integrados:*\n\n"
+            "• *Conversa Livre / Criação Direta:* Envie qualquer ideia, ex: `Faz um reels sobre automação com IA local` ou `Crie um carrossel de 6 slides sobre segurança em TI`.\n"
+            "• *Reels (9:16):* `/reels <ideia>` (Roteiro cena a cena, gancho 3s, overlay de safe-zone).\n"
+            "• *Story (9:16):* `/story <ideia>` (Card vertical, copy direto, selo de conversão).\n"
+            "• *Carrossel (4:5):* `/carrossel <ideia>` (Sequência de slides com retenção e payoff).\n"
+            "• *Feed (4:5):* `/feed <ideia>` (Card com manchete e copy no seu tom).\n"
+            "• *Selos e Badges:* `/badge <texto> [estilo]` (neon_ciano, neon_ouro, alerta_vermelho, pill_clean).\n"
+            "• *Overlay Vídeo:* `/overlay <titulo> | <subtitulo>` (Overlay 1080x1920 com safe-zones).\n"
+            "• *Planejamento Semanal:* `/planejar` ou `/semana` (Cronograma estratégico).\n"
+            "• *Auditar Texto:* `/auditar <texto>` (Score anti-IA e detecção de clichês).\n"
+            "• *Humanizar Texto:* `/humanizar <texto>` (Limpeza de termos robóticos de IA).\n"
+            "• *Desmontar Gancho:* `/hook <texto>` (Engenharia reversa de ganchos virais).\n"
+            "• *Hashtags SEO:* `/hashtags <tema>` (Hashtags nichadas 2026)."
+        ))
+        return
     elif cmd == "/novo":
         db.x("DELETE FROM conversas WHERE chat_id=?", (chat_id,))
         await telegram.avisar(chat_id, "Conversa zerada. Pode começar de novo.")
-    elif cmd in ATALHOS:
-        await _conversar(p, chat_id, ATALHOS[cmd])
-    elif cmd:
-        await telegram.avisar(chat_id, AJUDA)
-    else:
-        await _conversar(p, chat_id, texto)
+        return
+    elif cmd == "/canais":
+        canais = distribuicao.canais_ativos(p["id"])
+        if not canais:
+            await telegram.avisar(chat_id, "📡 *Distribuição Multiplataforma Local*\n\nNenhum canal adicional ativo no momento.\nConfigure no painel web (menu Conexões) para publicar simultaneamente no Threads, YouTube Shorts, LinkedIn ou TikTok sem custos.")
+        else:
+            nomes = [distribuicao.CANAIS_SUPORTADOS.get(c["canal"], {}).get("nome", c["canal"]) for c in canais]
+            await telegram.avisar(chat_id, "📡 *Canais Ativos para Postagem Simultânea:*\n\n• Instagram (Principal)\n" + "\n".join(f"• {n}" for n in nomes) + "\n\nAo aprovar qualquer post, ele será publicado automaticamente nestas redes.")
+        return
+
+    link_ig = meta_ai.extrair_link_instagram(texto)
+    if link_ig or cmd == "/blowup":
+        url_alvo = link_ig or texto.replace("/blowup", "").strip()
+        if not url_alvo:
+            await telegram.avisar(chat_id, "Envie o link do post ou Reel do Instagram (ou tema) que deseja transformar em post com a técnica Blow Up.")
+            return
+        await telegram.digitando(chat_id)
+        try:
+            async def _notificar_blow(msg_status: str):
+                try:
+                    await telegram.avisar(chat_id, msg_status)
+                except Exception:
+                    pass
+
+            fmt_blow = "story" if re.search(r"\b(story|stories)\b", t_lower) else "feed"
+            con_blow = conexao_do_perfil(p) or {}
+            res_est = await orquestrador.estudio.criar_post(
+                con=con_blow,
+                perfil=p,
+                pedido=f"Analise no Instagram com a Técnica Blow Up e recrie para meu perfil: {url_alvo} | {texto}",
+                formato_forcado=fmt_blow,
+                on_status=_notificar_blow,
+            )
+            res_orq = {
+                "acao": res_est.get("formato", fmt_blow),
+                "dados": res_est,
+                "resposta_telegram": res_est.get("legenda", ""),
+            }
+            await _criar_e_enviar_post_agente(p, chat_id, res_orq)
+            _guardar(chat_id, "user", texto)
+            _guardar(chat_id, "assistant", res_est.get("legenda", "")[:4000])
+        except Exception as e:
+            await telegram.avisar(chat_id, f"Não foi possível concluir o Blow Up: {str(e)[:250]}")
+        return
+
+    # Gatilhos em linguagem natural para editar post/story existente com skills VectorCraft
+    gatilhos_edicao = (
+        "editar story", "editar o story", "edite o story", "melhorar o story", "melhore o story",
+        "editar post", "editar o post", "edite o post", "melhorar o post", "melhore o post",
+        "adicione badge", "colocar badge", "coloque badge", "coloca badge", "adicionar badge",
+        "adicione selo", "colocar selo", "coloque selo", "coloca selo", "adicionar selo",
+    )
+    quer_edicao_skills = any(g in t_lower for g in gatilhos_edicao) or \
+                         (any(s in t_lower for s in ("skill", "skills", "vectorcraft", "badge", "selo")) and
+                          any(alvo in t_lower for alvo in ("story", "post", "card", "esse", "este", "último", "ultimo")))
+
+    if quer_edicao_skills:
+        _guardar(chat_id, "user", texto)
+        ok = await aplicar_skills_no_post(p, chat_id, texto)
+        if ok:
+            _guardar(chat_id, "assistant", "Skills VectorCraft aplicadas com sucesso ao card.")
+        return
+
+    # Comandos diretos do time de especialistas e Estúdio Criativo
+    comandos_orquestrador = (
+        "/reels", "/reel", "/story", "/stories", "/feed", "/post", "/carrossel",
+        "/badge", "/overlay", "/arte", "/vetor", "/planejar", "/semana",
+        "/audiencia", "/auditar", "/humanizar", "/hook", "/hashtags",
+    )
+    meta_ai_ativo = bool(settings.segredo("meta_ai_cookies"))
+    eh_pedido_orquestrador_natural = bool(
+        (meta_ai_ativo and cmd not in ATALHOS) or
+        re.search(r"\b(story|stories)\b", t_lower) or
+        any(k in t_lower for k in ("notícia", "notícias", "noticia", "noticias", "últimas notícias", "ultimas noticias", "matéria", "materia"))
+    )
+
+    if cmd in comandos_orquestrador or eh_pedido_orquestrador_natural:
+        cmd_mod = "roteiro" if any(k in t_lower for k in ("carrossel", "overlay", "arte", "vetor", "reels", "reel", "story", "stories")) else "legenda"
+        con = conexao_do_modulo(cmd_mod, p)
+        if not meta_ai_ativo and cmd not in ("/auditar", "/badge", "/overlay") and (not con or not con.get("modelo")):
+            await telegram.avisar(chat_id, "Ainda não há um modelo de linguagem configurado. Configure no painel (menu LLM).")
+            return
+        await telegram.digitando(chat_id)
+        try:
+            async def _notificar_telegram(msg_status: str):
+                try:
+                    await telegram.avisar(chat_id, msg_status)
+                except Exception:
+                    pass
+
+            res = await orquestrador.processar_mensagem(
+                con or {}, p, chat_id, texto, _historico(chat_id), on_status=_notificar_telegram
+            )
+
+            post_criado = await _criar_e_enviar_post_agente(p, chat_id, res)
+            if not post_criado:
+                await telegram.avisar(chat_id, res["resposta_telegram"])
+                dados = res.get("dados") or {}
+                if isinstance(dados, dict):
+                    arq = dados.get("arquivo_png") or dados.get("arquivo_svg")
+                    if arq and Path(arq).exists():
+                        try:
+                            await telegram.enviar_foto(chat_id, arq, f"🎨 {res.get('acao', 'arte').upper()}")
+                        except Exception:
+                            pass
+
+            _guardar(chat_id, "user", texto)
+            _guardar(chat_id, "assistant", res["resposta_telegram"])
+        except Exception as e:
+            await telegram.avisar(chat_id, f"Não consegui processar: {str(e)[:200]}")
+        return
+
+    await _conversar(p, chat_id, ATALHOS.get(cmd, texto))
 
 
 async def _conversar(p: dict, chat_id: str, texto: str) -> None:
     p = perfil(p["id"])  # perfil atualizado (o contexto pode ter mudado na conversa)
-    con = conexao_do_perfil(p)
+    con = conexao_do_modulo("chat", p)
     if not con or not con["modelo"]:
         await telegram.avisar(chat_id, "Ainda não há um modelo de linguagem configurado. Configure no painel (menu LLM).")
         return
@@ -1192,7 +1965,7 @@ async def _processar_visual(post_id: int, p: dict, destino: str = "aguardando_ap
     po = post(post_id)
     novo, tmp = None, None
     try:
-        con = conexao_do_perfil(p)
+        con = conexao_do_modulo("legenda", p)
         if not con or not con["modelo"]:
             raise ValueError("nenhuma conexão de LLM com modelo escolhido: configure em LLM")
         usa_banco = (po["angulo"] or "") == "banco"
@@ -1202,7 +1975,7 @@ async def _processar_visual(post_id: int, p: dict, destino: str = "aguardando_ap
         credito = ""
         feedback, res = None, None
         for _ in range(3):
-            _apagar(novo)
+            await _apagar_async(novo)
             novo = None
             try:
                 if po["fonte"] == FONTE_CITACAO:
@@ -1244,7 +2017,7 @@ async def _processar_visual(post_id: int, p: dict, destino: str = "aguardando_ap
                 db.log(p["id"], post_id, "telegram_falhou", str(e))
         return True
     except Exception as e:
-        _apagar(novo)
+        await _apagar_async(novo)
         msg = (str(e) or type(e).__name__)[:400]
         _set(post_id, "falhou", erro=msg)
         db.log(p["id"], post_id, "falhou", msg)
@@ -1290,7 +2063,7 @@ async def _refazer_visual(po: dict) -> bool:
     async with _GERACAO:
         ok = await _processar_visual(po["id"], p, destino)
     if ok:
-        _apagar_post(po)
+        await asyncio.to_thread(_apagar_post, po)
         db.log(p["id"], po["id"], "refeito")
         if po["tg_message_id"] and p["telegram_chat_id"]:
             await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], "Refeito. Nova versão abaixo.")
@@ -1299,14 +2072,14 @@ async def _refazer_visual(po: dict) -> bool:
 
 async def criar_meme_foto(p: dict, src, texto: str) -> int:
     """Meme com a SUA foto: os textos de cima/baixo vêm da descrição que você escreveu na legenda (“meme: …”)."""
-    con = conexao_do_perfil(p)
+    con = conexao_do_modulo("legenda", p)
     if not con or not con["modelo"]:
         raise ValueError("nenhum LLM configurado: o meme precisa dele para escrever o texto")
     descricao = re.sub(r"(?i)^\s*meme\b[:,.\s-]*", "", texto or "").strip() or "situação engraçada"
     res = await llm.meme_de_texto(con, p["contexto_md"], descricao)
     nome, estourou = await render.meme(src, res["topo"], res["base"], p)
     if estourou:
-        _apagar(nome)
+        await _apagar_async(nome)
         raise ValueError("o texto do meme não coube na imagem; peça de novo com uma ideia mais curta")
     pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,criado_em,atualizado_em)"
                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",

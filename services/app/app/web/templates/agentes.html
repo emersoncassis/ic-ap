@@ -1,0 +1,375 @@
+{% extends "base.html" %}{% block title %}Agentes & Skills · ic-ap{% endblock %}
+{% block body %}
+<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:24px">
+  <div>
+    <h1 style="margin:0;display:flex;align-items:center;gap:12px">
+      <span style="font-size:32px">🤖</span> Time de Agentes & Skills Especialistas
+    </h1>
+    <p class="sub" style="margin:6px 0 0">
+      Cada especialista cuida de uma etapa da esteira. Acione por linguagem natural no Telegram ou use os comandos diretos.
+    </p>
+  </div>
+  <a href="https://t.me/" target="_blank" class="btn cyan" style="text-decoration:none">
+    💬 Abrir no Telegram
+  </a>
+</div>
+
+<!-- Barra de Configuração da LLM dos Agentes -->
+<div class="card" style="margin-bottom:24px;border:1px solid rgba(0,240,255,0.3);background:linear-gradient(135deg,rgba(11,15,23,0.95),rgba(18,24,38,0.95))">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:26px">🧠</span>
+      <div>
+        <strong style="font-size:16px;color:var(--fg);display:block">Modelo de Linguagem (LLM) em Uso pelos Agentes</strong>
+        <span class="mut" style="font-size:13px">
+          Perfil: <b>{{ perfil.nome if perfil else 'Nenhum' }}</b> · Escolha qual IA comanda a redação, ganchos e carrosséis deste perfil
+        </span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <select id="select-llm-agentes" onchange="alterarLlmAgentes(this.value)" style="width:auto;min-width:220px;padding:8px 12px;font-size:13px;background:#090c12;border:1px solid var(--line);border-radius:8px;color:#fff;cursor:pointer">
+        {% for c in llm_conexoes %}
+          <option value="{{ c.id }}" {% if conexao_atual and conexao_atual.id == c.id %}selected{% endif %}>
+            {{ c.nome }} ({{ c.modelo or c.tipo }})
+          </option>
+        {% endfor %}
+        {% if not llm_conexoes %}
+          <option value="">Nenhum modelo cadastrado</option>
+        {% endif %}
+      </select>
+      <a href="/llm" class="btn sec" style="text-decoration:none">
+        ⚙️ Configurar Provedores & Servidores (LLM)
+      </a>
+      <a href="/escritorio" class="btn cyan" style="text-decoration:none">
+        🏢 Ver Agentes no Escritório
+      </a>
+    </div>
+  </div>
+</div>
+
+{% if sem_llm %}
+<div class="flash aviso">
+  ⚠️ Nenhum modelo de linguagem (LLM) conectado. <a href="/llm">Cadastre seu modelo de IA</a> para os agentes gerarem conteúdo.
+</div>
+{% endif %}
+
+<!-- Grid de Agentes e Skills -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:20px">
+
+  <!-- 1. Caption Writer -->
+  <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:28px">✍️</span>
+        <span class="badge publicado">Copywriting & Retenção</span>
+      </div>
+      <h2 style="margin:0 0 8px;font-size:19px">Caption Writer</h2>
+      <p class="mut" style="font-size:14px;line-height:1.5;margin:0 0 14px">
+        Redige legendas no tom de voz autêntico do autor. Gancho inquebrável nos primeiros 125 caracteres (antes do "mais..."), corpo escaneável e um único CTA alinhado ao objetivo (salvamento, compartilhamento, comentário ou seguidor).
+      </p>
+      <div style="background:#090c12;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+        <span class="mut">Comandos no Telegram:</span><br>
+        <code style="color:var(--cyan)">/reels &lt;ideia&gt;</code> · <code style="color:var(--cyan)">/story &lt;ideia&gt;</code> · <code style="color:var(--cyan)">/feed &lt;ideia&gt;</code>
+      </div>
+    </div>
+    <form onsubmit="testarAgente(event, 'caption_writer', this)">
+      <input type="text" placeholder="Ideia ou tema do post..." required style="margin-bottom:8px">
+      <button type="submit" class="sec" style="width:100%;justify-content:center">⚡ Testar Redação</button>
+      <div class="resultado-box" style="display:none;margin-top:12px;font-size:13px"></div>
+    </form>
+  </div>
+
+  <!-- 2. Carousel Planner -->
+  <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:28px">📑</span>
+        <span class="badge agendado">Estrutura Slide a Slide</span>
+      </div>
+      <h2 style="margin:0 0 8px;font-size:19px">Carousel Planner</h2>
+      <p class="mut" style="font-size:14px;line-height:1.5;margin:0 0 14px">
+        Estrutura carrosséis de 4 a 10 slides no padrão 2026: Capa com curiosity gap (loop aberto), slides intermediários com valor front-loaded para maximizar a rolagem (swipe-rate) e slide final com recompensa e chamada única.
+      </p>
+      <div style="background:#090c12;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+        <span class="mut">Comando no Telegram:</span><br>
+        <code style="color:var(--cyan)">/carrossel &lt;tema ou 5 passos para...&gt;</code>
+      </div>
+    </div>
+    <form onsubmit="testarAgente(event, 'carousel_planner', this)">
+      <input type="text" placeholder="Tema do carrossel..." required style="margin-bottom:8px">
+      <button type="submit" class="sec" style="width:100%;justify-content:center">⚡ Planejar Slides</button>
+      <div class="resultado-box" style="display:none;margin-top:12px;font-size:13px"></div>
+    </form>
+  </div>
+
+  <!-- 3. Hook Extractor -->
+  <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:28px">🎣</span>
+        <span class="badge" style="color:var(--gold);border-color:var(--gold);background:rgba(255,215,0,0.1)">Engenharia de Ganchos</span>
+      </div>
+      <h2 style="margin:0 0 8px;font-size:19px">Hook Extractor</h2>
+      <p class="mut" style="font-size:14px;line-height:1.5;margin:0 0 14px">
+        Desmonta vídeos virais ou textos de sucesso mapeando para uma das 10 fórmulas psicológicas do Instagram (Contraintuitivo, Erro Silencioso, Segredo, Comparação, Alerta, etc.) e gera templates práticos para o seu nicho.
+      </p>
+      <div style="background:#090c12;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+        <span class="mut">Comando no Telegram:</span><br>
+        <code style="color:var(--cyan)">/hook &lt;frase ou roteiro viral&gt;</code>
+      </div>
+    </div>
+    <form onsubmit="testarAgente(event, 'hook_extractor', this)">
+      <input type="text" placeholder="Ex: Pare de usar IA como estagiário..." required style="margin-bottom:8px">
+      <button type="submit" class="sec" style="width:100%;justify-content:center">⚡ Dissecar Fórmula</button>
+      <div class="resultado-box" style="display:none;margin-top:12px;font-size:13px"></div>
+    </form>
+  </div>
+
+  <!-- 4. VectorCraft Art Studio -->
+  <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:28px">🎨</span>
+        <span class="badge" style="color:var(--cyan);border-color:var(--cyan);background:rgba(0,240,255,0.1)">Design Vetorial VectorCraft</span>
+      </div>
+      <h2 style="margin:0 0 8px;font-size:19px">VectorCraft Art Studio</h2>
+      <p class="mut" style="font-size:14px;line-height:1.5;margin:0 0 14px">
+        Motor nativo de arte vetorial pura (SVG/PNG). Gera selos e stickers de alto contraste nos estilos Neon Ciano, Ouro Premium, Alerta Vermelho e Pill Clean para destacar capas e histórias com identidade visual única.
+      </p>
+      <div style="background:#090c12;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+        <span class="mut">Comando no Telegram:</span><br>
+        <code style="color:var(--cyan)">/badge NOVO neon_ciano | Exclusivo</code>
+      </div>
+    </div>
+    <form onsubmit="testarBadge(event, this)">
+      <div style="display:grid;grid-template-columns:1fr 130px;gap:8px;margin-bottom:8px">
+        <input type="text" placeholder="Texto do selo..." required>
+        <select>
+          <option value="neon_ciano">Neon Ciano</option>
+          <option value="neon_ouro">Neon Ouro</option>
+          <option value="alerta_vermelho">Alerta Vermelho</option>
+          <option value="pill_clean">Pill Clean</option>
+        </select>
+      </div>
+      <button type="submit" class="sec" style="width:100%;justify-content:center">⚡ Gerar Selo Vetorial</button>
+      <div class="resultado-box" style="display:none;margin-top:12px;text-align:center"></div>
+    </form>
+  </div>
+
+  <!-- 5. VectorCraft Video Graphics -->
+  <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:28px">🎬</span>
+        <span class="badge" style="color:#d85aff;border-color:#d85aff;background:rgba(216,90,255,0.1)">Overlays 9:16 & Safe Zones</span>
+      </div>
+      <h2 style="margin:0 0 8px;font-size:19px">VectorCraft Video Graphics</h2>
+      <p class="mut" style="font-size:14px;line-height:1.5;margin:0 0 14px">
+        Especialista em gráficos e overlays de tela cheia 1080x1920. Respeita rigorosamente as safe zones de interfaces móveis (Instagram Reels, TikTok e YouTube Shorts), evitando que botões laterais ou legendas cubram o conteúdo.
+      </p>
+      <div style="background:#090c12;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+        <span class="mut">Comando no Telegram:</span><br>
+        <code style="color:var(--cyan)">/overlay 3 SEGREDOS | Economize 10h</code>
+      </div>
+    </div>
+    <form onsubmit="testarOverlay(event, this)">
+      <input type="text" placeholder="Título impactante do Reels..." required style="margin-bottom:8px">
+      <button type="submit" class="sec" style="width:100%;justify-content:center">⚡ Gerar Overlay Safe-Zone</button>
+      <div class="resultado-box" style="display:none;margin-top:12px;text-align:center"></div>
+    </form>
+  </div>
+
+  <!-- 6. Humanizer -->
+  <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:28px">🛡️</span>
+        <span class="badge" style="color:var(--ok);border-color:var(--ok);background:rgba(63,185,80,0.1)">Filtro Anti-IA & Naturalidade</span>
+      </div>
+      <h2 style="margin:0 0 8px;font-size:19px">Humanizer (Audit & Desintoxicação)</h2>
+      <p class="mut" style="font-size:14px;line-height:1.5;margin:0 0 14px">
+        Elimina traços robóticos e jargões manjados ("no mundo dinâmico de hoje", "divisor de águas", "mergulhe fundo", tempestades de emojis). Gera score de densidade de IA (0% a 100%) e reescreve em português natural do Brasil.
+      </p>
+      <div style="background:#090c12;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+        <span class="mut">Comandos no Telegram:</span><br>
+        <code style="color:var(--cyan)">/auditar &lt;texto&gt;</code> · <code style="color:var(--cyan)">/humanizar &lt;texto&gt;</code>
+      </div>
+    </div>
+    <form onsubmit="testarAgente(event, 'humanizer', this)">
+      <input type="text" placeholder="Cole o texto para desintoxicação..." required style="margin-bottom:8px">
+      <button type="submit" class="sec" style="width:100%;justify-content:center">⚡ Humanizar Texto</button>
+      <div class="resultado-box" style="display:none;margin-top:12px;font-size:13px"></div>
+    </form>
+  </div>
+
+  <!-- 7. Content Planner -->
+  <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:28px">📅</span>
+        <span class="badge" style="color:var(--cyan);border-color:var(--cyan);background:rgba(0,240,255,0.1)">Planejamento Editorial</span>
+      </div>
+      <h2 style="margin:0 0 8px;font-size:19px">Content Planner</h2>
+      <p class="mut" style="font-size:14px;line-height:1.5;margin:0 0 14px">
+        Cria cronogramas semanais estratégicos respeitando a distribuição de alto desempenho (40% Reels para atração, 40% Carrossel para salvamentos e 20% Feed/Stories para relacionamento e conversão).
+      </p>
+      <div style="background:#090c12;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+        <span class="mut">Comando no Telegram:</span><br>
+        <code style="color:var(--cyan)">/planejar</code> ou <code style="color:var(--cyan)">/semana</code>
+      </div>
+    </div>
+    <form onsubmit="testarAgente(event, 'content_planner', this)">
+      <button type="submit" class="sec" style="width:100%;justify-content:center">⚡ Gerar Plano Semanal</button>
+      <div class="resultado-box" style="display:none;margin-top:12px;font-size:13px"></div>
+    </form>
+  </div>
+
+  <!-- 8. Audience Insights -->
+  <div class="card" style="display:flex;flex-direction:column;justify-content:space-between">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:28px">🔍</span>
+        <span class="badge" style="color:var(--gold);border-color:var(--gold);background:rgba(255,215,0,0.1)">Inteligência de Audiência</span>
+      </div>
+      <h2 style="margin:0 0 8px;font-size:19px">Audience Insights</h2>
+      <p class="mut" style="font-size:14px;line-height:1.5;margin:0 0 14px">
+        Mapeia dores latentes, dúvidas de pesquisa e objeções de compra da sua audiência para furar a bolha com ângulos de conteúdo com alto potencial de engajamento e compartilhamento.
+      </p>
+      <div style="background:#090c12;border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+        <span class="mut">Comando no Telegram:</span><br>
+        <code style="color:var(--cyan)">/audiencia</code> ou <code style="color:var(--cyan)">/audiencia &lt;nicho&gt;</code>
+      </div>
+    </div>
+    <form onsubmit="testarAgente(event, 'audience_insights', this)">
+      <input type="text" placeholder="Sub-nicho opcional (ex: donos de indústria)..." style="margin-bottom:8px">
+      <button type="submit" class="sec" style="width:100%;justify-content:center">⚡ Mapear Dores & Ângulos</button>
+      <div class="resultado-box" style="display:none;margin-top:12px;font-size:13px"></div>
+    </form>
+  </div>
+
+</div>
+
+<script>
+async function testarAgente(e, agente, formEl) {
+  e.preventDefault();
+  const inputEl = formEl.querySelector('input');
+  const btnEl = formEl.querySelector('button');
+  const boxEl = formEl.querySelector('.resultado-box');
+  const entrada = inputEl ? inputEl.value : '';
+
+  btnEl.disabled = true;
+  btnEl.innerText = 'Processando com IA...';
+  boxEl.style.display = 'block';
+  boxEl.innerHTML = '<span class="mut">⏳ Consultando o especialista...</span>';
+
+  try {
+    const res = await fetch('/api/agentes/executar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({agente: agente, entrada: entrada, perfil_id: {{ perfil.id if perfil else 'null' }}})
+    });
+    const json = await res.json();
+    if (json.ok) {
+      boxEl.innerHTML = '<div style="background:#090c12;border:1px solid var(--ok);border-radius:8px;padding:10px;white-space:pre-wrap;color:#e6edf5;max-height:260px;overflow-y:auto">' + JSON.stringify(json.resultado, null, 2) + '</div>';
+    } else {
+      boxEl.innerHTML = '<div style="color:var(--err)">❌ ' + (json.erro || 'Falha ao executar') + '</div>';
+    }
+  } catch (err) {
+    boxEl.innerHTML = '<div style="color:var(--err)">Erro de conexão: ' + err.message + '</div>';
+  } finally {
+    btnEl.disabled = false;
+    btnEl.innerText = '⚡ Testar Novamente';
+  }
+}
+
+async function testarBadge(e, formEl) {
+  e.preventDefault();
+  const texto = formEl.querySelector('input').value;
+  const estilo = formEl.querySelector('select').value;
+  const btnEl = formEl.querySelector('button');
+  const boxEl = formEl.querySelector('.resultado-box');
+
+  btnEl.disabled = true;
+  btnEl.innerText = 'Renderizando SVG/PNG...';
+  boxEl.style.display = 'block';
+  boxEl.innerHTML = '<span class="mut">⏳ Desenhando formas vetoriais...</span>';
+
+  try {
+    const res = await fetch('/api/agentes/executar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({agente: 'vector_badge', entrada: texto, estilo: estilo, perfil_id: {{ perfil.id if perfil else 'null' }}})
+    });
+    const json = await res.json();
+    if (json.ok && json.resultado && json.resultado.png_url) {
+      boxEl.innerHTML = '<img src="' + json.resultado.png_url + '" style="max-width:100%;height:60px;object-fit:contain;margin-top:6px;border-radius:6px;border:1px solid var(--line)">';
+    } else {
+      boxEl.innerHTML = '<div style="color:var(--err)">❌ Falha ao renderizar badge</div>';
+    }
+  } catch(err) {
+    boxEl.innerHTML = '<div style="color:var(--err)">Erro: ' + err.message + '</div>';
+  } finally {
+    btnEl.disabled = false;
+    btnEl.innerText = '⚡ Gerar Selo Vetorial';
+  }
+}
+
+async function testarOverlay(e, formEl) {
+  e.preventDefault();
+  const titulo = formEl.querySelector('input').value;
+  const btnEl = formEl.querySelector('button');
+  const boxEl = formEl.querySelector('.resultado-box');
+
+  btnEl.disabled = true;
+  btnEl.innerText = 'Renderizando 1080x1920...';
+  boxEl.style.display = 'block';
+  boxEl.innerHTML = '<span class="mut">⏳ Aplicando safe-zones mobile...</span>';
+
+  try {
+    const res = await fetch('/api/agentes/executar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({agente: 'vector_overlay', entrada: titulo, perfil_id: {{ perfil.id if perfil else 'null' }}})
+    });
+    const json = await res.json();
+    if (json.ok && json.resultado && json.resultado.png_url) {
+      boxEl.innerHTML = '<div style="background:#000;padding:6px;border-radius:8px;display:inline-block"><img src="' + json.resultado.png_url + '" style="height:140px;object-fit:contain;border-radius:4px"></div>';
+    } else {
+      boxEl.innerHTML = '<div style="color:var(--err)">❌ Falha ao renderizar overlay</div>';
+    }
+  } catch(err) {
+    boxEl.innerHTML = '<div style="color:var(--err)">Erro: ' + err.message + '</div>';
+  } finally {
+    btnEl.disabled = false;
+    btnEl.innerText = '⚡ Gerar Overlay Safe-Zone';
+  }
+}
+
+async function alterarLlmAgentes(llmId) {
+  const perfilId = {{ perfil.id if perfil else 'null' }};
+  if (!perfilId) {
+    alert('Selecione um perfil primeiro no topo da página.');
+    return;
+  }
+  try {
+    const res = await fetch('/api/perfil/definir-llm', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({perfil_id: perfilId, llm_conexao_id: llmId})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const toast = document.createElement('div');
+      toast.innerText = '✅ IA dos agentes atualizada com sucesso para este perfil!';
+      toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#3fb950;color:#05070a;padding:10px 18px;border-radius:8px;font-weight:700;z-index:999;box-shadow:0 4px 12px rgba(0,0,0,0.5)';
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 2500);
+    } else {
+      alert('Erro ao atualizar LLM: ' + (data.erro || 'Falha desconhecida'));
+    }
+  } catch (e) {
+    alert('Erro de conexão ao atualizar LLM: ' + e.message);
+  }
+}
+</script>
+{% endblock %}

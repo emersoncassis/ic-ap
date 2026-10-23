@@ -5,6 +5,7 @@ python-multipart==0.0.20
 itsdangerous==2.2.0
 httpx==0.28.1
 trafilatura==2.0.0
+lxml_html_clean==0.4.2   # trafilatura/justext importam lxml.html.clean, que saiu do lxml 5.2+
 feedparser==6.0.11
 playwright==1.49.0
 cryptography==44.0.0

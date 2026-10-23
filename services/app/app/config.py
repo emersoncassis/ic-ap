@@ -13,12 +13,33 @@ MUSICAS = DATA / "musicas"
 FUNDOS = DATA / "fundos"      # imagem de fundo de cada post (foto sua ou do banco de imagens), privada
 MARCA = DATA / "marca"        # logotipos dos perfis
 CARDS = DATA / "cards"        # cards privados (preview no painel)
+ARTES = DATA / "artes"        # artes e vetores gerados pelo VectorCraft
 DB_PATH = DATA / "app.db"
 SECRET_FILE = DATA / "secret.key"
 CARD_TEMPLATES = Path(env("TEMPLATES_DIR", "/srv/card-templates"))
+if not CARD_TEMPLATES.exists():
+    _local_templates = Path(__file__).resolve().parent.parent.parent.parent / "templates"
+    if _local_templates.exists():
+        CARD_TEMPLATES = _local_templates
+SKILLS_DIR = Path(env("SKILLS_DIR", "/srv/skills"))
+if not SKILLS_DIR.exists():
+    _local_skills = Path(__file__).resolve().parent.parent.parent.parent / "skills"
+    if _local_skills.exists():
+        SKILLS_DIR = _local_skills
 CONTEXT_FILE = Path(env("CONTEXT_FILE", "/context/meu_contexto.md"))   # só semente do perfil inicial
 FEEDS_FILE = Path(env("FEEDS_FILE", "/config/feeds.yml"))              # só semente dos feeds iniciais
 CHROMIUM = env("CHROMIUM_PATH") or None
+if not CHROMIUM:
+    for _c in (
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ):
+        if Path(_c).exists():
+            CHROMIUM = _c
+            break
 PUBLIC_PORT = int(env("PUBLIC_PORT", "8081"))
 CLOUDFLARED_BIN = env("CLOUDFLARED_BIN", "cloudflared")
 

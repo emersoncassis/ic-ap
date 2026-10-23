@@ -28,7 +28,18 @@ async def ler_feed(url: str) -> list[dict]:
 
 def pontuar(item: dict, palavras: list[str]) -> int:
     txt = f"{item['titulo']} {item['resumo']}".lower()
-    return sum(1 for p in palavras if p and p.lower() in txt)
+    score = 0
+    for p in palavras:
+        if not p:
+            continue
+        p_clean = p.strip().lower()
+        if len(p_clean) <= 3:
+            if re.search(rf"\b{re.escape(p_clean)}\b", txt):
+                score += 1
+        else:
+            if p_clean in txt:
+                score += 1
+    return score
 
 
 async def candidatas(feeds: list[dict], palavras: list[str], max_idade_h: int, ja_usadas: set[str]) -> list[dict]:
@@ -63,12 +74,21 @@ def _marcar_em_alta(itens: list[dict]) -> None:
 
 
 async def extrair(url: str) -> dict:
-    def _run():
-        html = trafilatura.fetch_url(url)
-        if not html:
+    html = None
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers=UA) as c:
+            r = await c.get(url)
+            if r.status_code == 200 and r.text:
+                html = r.text
+    except Exception:
+        html = None
+
+    def _run(raw_html: str | None):
+        conteudo = raw_html or trafilatura.fetch_url(url)
+        if not conteudo:
             raise ValueError("não consegui baixar a página")
-        d = trafilatura.bare_extraction(html, url=url, with_metadata=True)
+        d = trafilatura.bare_extraction(conteudo, url=url, with_metadata=True)
         if not d or not getattr(d, "text", None):
             raise ValueError("sem texto extraível")
         return {"titulo": d.title or "", "fonte": d.sitename or d.hostname or "", "texto": d.text[:MAX_CHARS]}
-    return await asyncio.to_thread(_run)
+    return await asyncio.to_thread(_run, html)

@@ -10,7 +10,8 @@ COPY services/app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY services/app/app ./app
 COPY templates /srv/card-templates
+COPY skills /srv/skills
 COPY context /context
 COPY config /config
-ENV TEMPLATES_DIR=/srv/card-templates DATA_DIR=/data
+ENV TEMPLATES_DIR=/srv/card-templates DATA_DIR=/data SKILLS_DIR=/srv/skills
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

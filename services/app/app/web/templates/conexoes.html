@@ -3,6 +3,21 @@
 <h1>Conexões e acesso</h1>
 <p class="sub">Tudo que o app precisa para falar com o mundo, configurado aqui. Os segredos ficam criptografados.</p>
 
+<div class="card" style="margin-bottom:24px;border:1px solid rgba(0,240,255,0.3);background:linear-gradient(135deg,rgba(11,15,23,0.95),rgba(18,24,38,0.95))">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:26px">🧠</span>
+      <div>
+        <strong style="font-size:16px;color:var(--fg);display:block">Modelos de Linguagem & IA dos Agentes (LLM)</strong>
+        <span class="mut" style="font-size:13px">Gerencie servidores locais (Ollama, GPU/NPU), Claude, Gemini, OpenAI e roteamento de IA por módulo</span>
+      </div>
+    </div>
+    <a href="/llm" class="btn cyan" style="text-decoration:none;font-weight:700">
+      ⚡ Abrir Painel de IA & Modelos (LLM) ↗
+    </a>
+  </div>
+</div>
+
 <h2 style="margin-top:0">URL pública das imagens</h2>
 <div class="grid">
 <div class="card">
@@ -26,16 +41,148 @@
 </div>
 </div>
 
-<h2>Telegram (aprovação pelo celular)</h2>
+<h2>Telegram (Aprovação e Notificações no Celular)</h2>
 <div class="card">
-  <p class="mut" style="margin-top:0">Crie um bot com o @BotFather, cole o token aqui e informe o chat_id de cada pessoa na tela do perfil.</p>
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+    <div>
+      <b>Conexão do Bot Oficial</b>
+      <p class="mut" style="margin:4px 0 0;font-size:13px">Receba cards e aprove postagens com 1 toque no celular.</p>
+    </div>
+    <a href="https://t.me/BotFather?start=newbot" target="_blank" class="btn sec" style="background:#229ed9;color:#fff;border:none;font-size:12px">
+      🤖 Abrir @BotFather no Telegram (1 Clique)
+    </a>
+  </div>
+
+  <div style="background:#131820;border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:14px;font-size:13px">
+    <b>Passo a passo rápido (30 segundos):</b>
+    <ol style="margin:6px 0 0 18px;color:var(--mut);line-height:1.5">
+      <li>Clique no botão acima para abrir o <b>@BotFather</b> no Telegram e envie <code>/newbot</code>.</li>
+      <li>Escolha um nome e um @ para seu bot (ex: <i>MeuPostBot</i>).</li>
+      <li>Copie o token fornecido (ex: <code>123456789:ABC...</code>) e cole no campo abaixo:</li>
+    </ol>
+  </div>
+
   <form method="post" action="/config/telegram"><input type="hidden" name="csrf" value="{{ csrf }}">
     <label>Token do bot {% if tg_token %}<small>(atual: {{ tg_token }})</small>{% endif %}</label>
-    <input type="password" name="telegram_token" autocomplete="off">
-    <div class="acts"><button type="submit">Salvar token</button>
-      {% if tg_token %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
+    <input type="password" name="telegram_token" placeholder="Cole o token do BotFather aqui..." autocomplete="off">
+    <div class="acts">
+      <button type="submit">Salvar token</button>
+      {% if tg_token %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}
+    </div>
   </form>
 </div>
+
+<h2>Meta AI (Técnica Blow Up via Navegador)</h2>
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div>
+      <b>Meta AI Logado</b>
+      <span class="badge {{ 'publicado' if tem_meta_ai else 'falhou' }}">{{ 'Sessão Salva' if tem_meta_ai else 'Não configurado' }}</span>
+    </div>
+    <div style="display:flex;gap:8px">
+      <a href="https://cookie-editor.com" target="_blank" class="btn sec" style="font-size:12px">
+        🧩 Instalar Cookie-Editor (1 Clique)
+      </a>
+      <a href="https://www.meta.ai" target="_blank" class="btn sec" style="font-size:12px">
+        🌐 Abrir meta.ai ↗
+      </a>
+    </div>
+  </div>
+  <p class="mut" style="margin:8px 0 10px;font-size:13px">
+    Permite dissecar qualquer post ou Reel do Instagram pelo <b>meta.ai</b> logado no navegador. Quando você envia um link no Telegram, o robô abre o Meta AI e aplica a técnica Blow Up (raio-x de retenção, fórmula viral e recriação autoral).
+  </p>
+
+  <div style="background:#131820;border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:14px;font-size:13px">
+    <b>Como exportar seus cookies em 3 passos simples:</b>
+    <ol style="margin:6px 0 0 18px;color:var(--mut);line-height:1.5">
+      <li>Instale a extensão <b>Cookie-Editor</b> (botão acima) no Chrome, Edge ou Firefox.</li>
+      <li>Abra o <a href="https://www.meta.ai" target="_blank" style="color:var(--acc)">meta.ai</a> e faça login com sua conta do Facebook ou Instagram.</li>
+      <li>Clique no ícone de biscoito da extensão na barra do navegador, clique em <b>Export</b> -> <b>Export as JSON</b> e cole o resultado abaixo:</li>
+    </ol>
+  </div>
+
+  <form method="post" action="/config/meta_ai"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Cookies da sessão do Meta AI <small>(formato JSON ou texto)</small></label>
+    <textarea name="cookies" rows="3" placeholder="Cole aqui o JSON copiado da extensão Cookie-Editor..." style="width:100%;font-family:monospace;font-size:12px;margin-bottom:8px"></textarea>
+    <div class="acts">
+      <button type="submit">Salvar Cookies</button>
+      {% if tem_meta_ai %}<button class="bad" type="submit" name="acao" value="remover">Remover Sessão</button>{% endif %}
+    </div>
+  </form>
+  {% if tem_meta_ai and perfil %}
+  <form method="post" action="/conexoes/meta_ai" style="margin-top:8px"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}"><button class="sec" type="submit">⚡ Testar Conexão do Meta AI Agora</button></form>
+  {% endif %}
+</div>
+
+<h2>Distribuição Multiplataforma Local (Sem Upload-Post)</h2>
+<p class="mut" style="margin-top:0">
+  Motor soberano e local para publicar seus posts e vídeos simultaneamente em outras plataformas quando aprovados, sem depender de assinaturas ou servidores de terceiros.
+</p>
+{% if perfil %}
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+{% for canal_k, esp in canais_espec.items() %}
+  {% set c_cad = canais_map.get(canal_k) if canais_map else None %}
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <b>{{ esp.nome }}</b>
+      <span class="badge {{ 'publicado' if c_cad and c_cad.ativo and c_cad.tem_token else ('aviso' if c_cad and c_cad.tem_token else 'falhou') }}">
+        {{ 'Ativo' if c_cad and c_cad.ativo and c_cad.tem_token else ('Pausado' if c_cad and c_cad.tem_token else 'Não configurado') }}
+      </span>
+    </div>
+    <p class="mut" style="margin:6px 0 10px;font-size:13px">{{ esp.descricao }}</p>
+    <form method="post" action="/config/canal_{{ canal_k }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>
+        {% if canal_k == 'threads' %}Threads User ID (ou 'me'){% elif canal_k == 'youtube' %}Canal ID (ou 'me'){% elif canal_k == 'linkedin' %}Person / Org URN (ex: urn:li:person:...){% elif canal_k == 'tiktok' %}Creator Open ID{% endif %}
+      </label>
+      <input name="identificador" value="{{ c_cad.identificador if c_cad else '' }}" placeholder="Identificador da conta" autocomplete="off">
+
+      <label>Token / Chave de Acesso {% if c_cad and c_cad.tem_token %}<small>(atual: {{ c_cad.token_mascarado }})</small>{% endif %}</label>
+      <input type="password" name="token" placeholder="Cole o token da plataforma" autocomplete="off">
+
+      {% if canal_k == 'youtube' %}
+      <label>Visibilidade do Shorts</label>
+      <select name="privacy_status" style="width:100%;margin-bottom:8px">
+        <option value="public" {% if c_cad and c_cad.extra.get('privacy_status') == 'public' %}selected{% endif %}>Público</option>
+        <option value="unlisted" {% if c_cad and c_cad.extra.get('privacy_status') == 'unlisted' %}selected{% endif %}>Não listado</option>
+        <option value="private" {% if c_cad and c_cad.extra.get('privacy_status') == 'private' %}selected{% endif %}>Privado</option>
+      </select>
+      {% elif canal_k == 'tiktok' %}
+      <label>Privacidade do Vídeo</label>
+      <select name="privacy_level" style="width:100%;margin-bottom:8px">
+        <option value="PUBLIC_TO_EVERYONE" {% if c_cad and c_cad.extra.get('privacy_level') == 'PUBLIC_TO_EVERYONE' %}selected{% endif %}>Público</option>
+        <option value="MUTUAL_FOLLOW_FRIENDS" {% if c_cad and c_cad.extra.get('privacy_level') == 'MUTUAL_FOLLOW_FRIENDS' %}selected{% endif %}>Amigos</option>
+        <option value="SELF_ONLY" {% if c_cad and c_cad.extra.get('privacy_level') == 'SELF_ONLY' %}selected{% endif %}>Privado</option>
+      </select>
+      {% endif %}
+
+      <div style="margin:8px 0">
+        <label style="cursor:pointer">
+          <input type="checkbox" name="ativo" value="1" {% if not c_cad or c_cad.ativo %}checked{% endif %}>
+          Publicar automaticamente ao aprovar post no Instagram
+        </label>
+      </div>
+
+      <div class="acts">
+        <button type="submit">Salvar</button>
+        {% if c_cad and c_cad.tem_token %}
+          <button class="bad" type="submit" name="acao" value="remover">Remover</button>
+        {% endif %}
+      </div>
+    </form>
+    {% if c_cad and c_cad.tem_token %}
+    <form method="post" action="/conexoes/canal_{{ canal_k }}" style="margin-top:6px">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="perfil_id" value="{{ perfil.id }}">
+      <button class="sec" type="submit">Testar Conexão</button>
+    </form>
+    {% endif %}
+  </div>
+{% endfor %}
+</div>
+{% else %}
+<div class="card mut">Selecione um perfil para configurar os canais de distribuição.</div>
+{% endif %}
 
 <h2>Imagens de fundo (Higgsfield e Unsplash)</h2>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
@@ -51,6 +198,12 @@
   <label>Chave de API {% if un_key %}<small>(atual: {{ un_key }})</small>{% endif %}</label>
   <input type="password" name="chave" autocomplete="off">
   <div class="acts"><button type="submit">Salvar</button>{% if un_key %}<button class="bad" type="submit" name="acao" value="remover">Remover</button>{% endif %}</div>
+</form>
+<form method="post" action="/config/bancos_abertos" class="card"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <b>Plano B de imagens (sem chave)</b> <small>Bing, Wikimedia, Wallhaven, Picsum e Pollinations</small>
+  <p class="mut" style="margin:6px 0 0">Usado quando não há Higgsfield/Unsplash ou eles falham. São imagens de terceiros e <b>podem ter direitos autorais</b>: para um perfil profissional, prefira desligar e usar suas fotos, Higgsfield ou Unsplash.</p>
+  <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="ligado" {{ 'checked' if bancos_abertos }} style="width:auto"> Permitir o plano B</label>
+  <div class="acts"><button type="submit">Salvar</button></div>
 </form>
 </div>
 <small>Usado em citações com foto de fundo e memes. Imagem do Higgsfield vai com o aviso “gerada por IA” na legenda; foto do Unsplash, com o crédito do fotógrafo.</small>
@@ -92,7 +245,7 @@
 <h2>Testes do perfil{% if perfil %}: {{ perfil.nome }}{% endif %}</h2>
 {% if perfil %}
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
-{% for alvo, tit, desc in [('llm','Modelo de linguagem','Gera uma reação de exemplo com a conexão deste perfil.'),('meta','Instagram (Meta)','Confere o token e o IG_USER_ID e mostra a conta.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('whisper','Transcrição','Envia um áudio de teste ao servidor Whisper.'),('tts','Voz','Gera uma frase de teste com o servidor de voz.'),('banco','Imagens de fundo','Pede uma imagem de teste (Higgsfield gasta créditos).'),('publico','URL pública','Grava um arquivo de teste e busca pela internet.')] %}
+{% for alvo, tit, desc in [('llm','Modelo de linguagem','Gera uma reação de exemplo com a conexão deste perfil.'),('meta','Instagram (Meta)','Confere o token e o IG_USER_ID e mostra a conta.'),('meta_ai','Meta AI (Blow Up)','Testa a navegação no meta.ai e a validade da sessão no Chromium.'),('telegram','Telegram','Envia uma mensagem de teste ao chat do perfil.'),('whisper','Transcrição','Envia um áudio de teste ao servidor Whisper.'),('tts','Voz','Gera uma frase de teste com o servidor de voz.'),('banco','Imagens de fundo','Pede uma imagem de teste (Higgsfield gasta créditos).'),('publico','URL pública','Grava um arquivo de teste e busca pela internet.')] %}
   <div class="card"><b>{{ tit }}</b><p class="mut" style="margin:4px 0 10px">{{ desc }}</p>
     <form method="post" action="/conexoes/{{ alvo }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="perfil_id" value="{{ perfil.id }}"><button class="sec" type="submit">Testar</button></form></div>
 {% endfor %}

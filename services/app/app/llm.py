@@ -10,12 +10,19 @@ import httpx
 from . import config as C
 
 TIPOS = {
+    "openrouter": "OpenRouter (Claude, DeepSeek, GPT-4o, Llama 3.3, Grátis & Pagos)",
     "openai": "Compatível com OpenAI (LM Studio, Jan, llama.cpp, vLLM…)",
-    "ollama": "Ollama",
+    "ollama": "Ollama (Local / GPU / NPU)",
     "gemini": "Google Gemini (API)",
     "anthropic": "Anthropic Claude (API)",
 }
-DICAS_URL = {"openai": "http://host.docker.internal:1234/v1", "ollama": "http://host.docker.internal:11434", "gemini": "", "anthropic": ""}
+DICAS_URL = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "openai": "http://host.docker.internal:1234/v1",
+    "ollama": "http://host.docker.internal:11434",
+    "gemini": "",
+    "anthropic": "",
+}
 CAMPOS = ["manchete_curta", "minha_reacao", "legenda_instagram", "fonte", "confianca"]
 SCHEMA = {
     "type": "object",
@@ -34,7 +41,7 @@ Responda SOMENTE com um JSON com os campos:
 - legenda_instagram: legenda completa com a fonte citada e 3 a 5 hashtags, até 2000 caracteres.
 - fonte: nome do veículo.
 - confianca: "alta" se a notícia é clara e você entendeu bem, "media" ou "baixa" se faltou informação.
-Regras: não invente fatos que não estejam no texto da notícia. Não reproduza trechos longos da matéria. Português do Brasil.
+Regras: não invente fatos que não estejam no texto da notícia. Não reproduza trechos longos da matéria. As frases entre aspas e os "padrões" do perfil são exemplos do JEITO do autor, não texto pronto: NÃO copie nenhuma delas nem trecho seu. Escreva frases novas sobre a ideia, com o mesmo tom. Português do Brasil.
 """.strip()
 
 DICA_DOCKER = " Se o programa roda no seu PC e este app roda no Docker, use host.docker.internal no lugar de localhost."
@@ -48,10 +55,12 @@ def _erro_http(e: Exception, url: str) -> LLMError:
     if isinstance(e, httpx.HTTPStatusError):
         corpo = e.response.text[:200].replace("\n", " ")
         dica = ""
-        if "API key not valid" in e.response.text or "API_KEY_INVALID" in e.response.text:
-            dica = " → A chave de API foi recusada: confira se copiou inteira, sem espaços, ou gere uma nova em aistudio.google.com/apikey."
-        elif e.response.status_code in (401, 403) and "unregistered callers" in e.response.text:
-            dica = " → A chamada foi sem chave de API: edite a conexão no menu LLM e cole a chave."
+        if "API key not valid" in e.response.text or "API_KEY_INVALID" in e.response.text or "invalid_api_key" in e.response.text or "Invalid API Key" in e.response.text:
+            dica = " → A chave de API foi recusada: confira se copiou inteira, sem espaços extras."
+        elif e.response.status_code in (401, 403) and ("unregistered callers" in e.response.text or "Missing API key" in e.response.text or "User not found" in e.response.text or "No auth credentials" in e.response.text):
+            dica = " → Chamada sem chave de API ou chave não autorizada: cole sua chave no menu LLM."
+        elif e.response.status_code == 402 or "insufficient credits" in e.response.text.lower():
+            dica = " → Créditos insuficientes na conta para este modelo. Escolha um modelo gratuito (:free) ou recarregue sua conta."
         return LLMError(f"HTTP {e.response.status_code} em {url}: {corpo}{dica}")
     if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
         return LLMError(f"não consegui conectar em {url}.{DICA_DOCKER}")
@@ -64,6 +73,17 @@ async def listar_modelos(tipo: str, base_url: str, key: str) -> tuple[list[str],
     base = (base_url or "").strip().rstrip("/")
     async with httpx.AsyncClient(timeout=20) as c:
         try:
+            if tipo == "openrouter":
+                if not key:
+                    raise LLMError("informe a chave de API da OpenRouter (sk-or-v1-...)")
+                b = base or "https://openrouter.ai/api/v1"
+                hdr = {"Authorization": f"Bearer {key}", "HTTP-Referer": "https://ic-ap.local", "X-Title": "ic-ap"}
+                r = await c.get(f"{b}/models", headers=hdr)
+                r.raise_for_status()
+                items = r.json().get("data", [])
+                gratuitos = sorted([m["id"] for m in items if ":free" in m.get("id", "")])
+                pagos = sorted([m["id"] for m in items if ":free" not in m.get("id", "")])
+                return (gratuitos + pagos), b
             if tipo == "openai":
                 tentativas = [base] + ([base + "/v1"] if not base.endswith("/v1") else [])
                 ultimo: Exception | None = None
@@ -116,49 +136,104 @@ def _alternar(msgs: list[dict]) -> list[dict]:
 
 
 async def _chat(con: dict, system: str, user: str, temperature: float, schema: dict | None = None,
-                historico: list[dict] | None = None, imagem: str | None = None) -> str:
+                historico: list[dict] | None = None, imagem: str | None = None,
+                _allow_fallback: bool = True) -> str:
     """imagem: JPEG em base64 anexado à última mensagem (modelos com visão)."""
+    import asyncio
     schema = schema or SCHEMA
-    tipo, modelo, base, key = con["tipo"], con["modelo"], con["base_url"].rstrip("/"), con.get("api_key", "")
+    tipo, modelo, base, key = con["tipo"], con["modelo"], con.get("base_url", "").rstrip("/"), con.get("api_key", "")
+    if not key and con.get("api_key_enc"):
+        from . import crypto
+        key = crypto.dec(con["api_key_enc"])
     if not modelo:
         raise LLMError("a conexão não tem modelo escolhido")
-    if tipo in ("gemini", "anthropic") and not str(key or "").strip():
+    if tipo == "openrouter" and not base:
+        base = "https://openrouter.ai/api/v1"
+    if tipo in ("gemini", "anthropic", "openrouter") and not str(key or "").strip():
         raise LLMError(f"a conexão “{con.get('nome', tipo)}” está sem chave de API: abra o menu LLM, edite a conexão, cole a chave e clique em Aplicar e testar")
     turnos = _alternar([*(historico or []), {"role": "user", "content": user}])
     msgs = [{"role": "system", "content": system}, *turnos]
-    if imagem and tipo in ("openai", "ollama"):
+    if imagem and tipo in ("openai", "openrouter", "ollama"):
         ult = dict(msgs[-1])
-        if tipo == "openai":
+        if tipo in ("openai", "openrouter"):
             ult["content"] = [{"type": "text", "text": ult["content"]}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + imagem}}]
         else:
             ult["images"] = [imagem]
         msgs[-1] = ult
-    async with httpx.AsyncClient(timeout=300) as c:
+
+    timeout_s = 120 if tipo == "ollama" else 45
+    async with httpx.AsyncClient(timeout=timeout_s) as c:
         try:
-            if tipo == "openai":
+            if tipo in ("openai", "openrouter"):
                 hdr = {"Authorization": f"Bearer {key}"} if key else {}
-                corpo = {"model": modelo, "messages": msgs, "temperature": temperature, "stream": False}
-                r = await c.post(f"{base}/chat/completions", headers=hdr, json={
-                    **corpo, "response_format": {"type": "json_schema", "json_schema": {"name": "reacao", "schema": schema, "strict": True}}})
-                if r.status_code == 400:  # servidor sem suporte a response_format: confia no prompt
-                    r = await c.post(f"{base}/chat/completions", headers=hdr, json=corpo)
-                r.raise_for_status()
-                return r.json()["choices"][0]["message"]["content"]
+                if tipo == "openrouter":
+                    hdr["HTTP-Referer"] = "https://ic-ap.local"
+                    hdr["X-Title"] = "ic-ap"
+                modelos_tentativa = [modelo]
+                if tipo == "openrouter" and "127.0.0.1" not in base and "localhost" not in base:
+                    for m_fb in ("openrouter/free", "meta-llama/llama-3.3-70b-instruct:free", "google/gemma-3-27b-it:free"):
+                        if m_fb not in modelos_tentativa:
+                            modelos_tentativa.append(m_fb)
+
+                ultimo_r = None
+                for idx_m, mod_atual in enumerate(modelos_tentativa):
+                    corpo = {"model": mod_atual, "messages": msgs, "temperature": temperature, "stream": False}
+                    r = await c.post(f"{base}/chat/completions", headers=hdr, json={
+                        **corpo, "response_format": {"type": "json_schema", "json_schema": {"name": "reacao", "schema": schema, "strict": True}}})
+                    if r.status_code in (400, 422):  # servidor sem suporte a strict json_schema: tenta json_object
+                        r = await c.post(f"{base}/chat/completions", headers=hdr, json={
+                            **corpo, "response_format": {"type": "json_object"}})
+                        if r.status_code in (400, 422):  # fallback confiando no prompt
+                            r = await c.post(f"{base}/chat/completions", headers=hdr, json=corpo)
+                    ultimo_r = r
+                    if r.status_code in (429, 500, 502, 503, 504) and idx_m < len(modelos_tentativa) - 1:
+                        await asyncio.sleep(0.8)
+                        continue
+                    r.raise_for_status()
+                    data_json = r.json()
+                    conteudo = (data_json.get("choices") or [{}])[0].get("message", {}).get("content")
+                    if not conteudo and idx_m < len(modelos_tentativa) - 1:
+                        continue
+                    return conteudo or ""
+                if ultimo_r is not None:
+                    ultimo_r.raise_for_status()
+
             if tipo == "ollama":
                 r = await c.post(f"{base}/api/chat", json={
                     "model": modelo, "stream": False, "format": schema, "messages": msgs,
                     "options": {"temperature": temperature, "num_ctx": 8192}})
                 r.raise_for_status()
                 return r.json()["message"]["content"]
+
             if tipo == "gemini":
-                r = await c.post(f"{C.GEMINI_API_BASE}/models/{modelo}:generateContent", headers={"x-goog-api-key": key}, json={
+                modelos_gemini = [modelo]
+                if "127.0.0.1" not in C.GEMINI_API_BASE and "localhost" not in C.GEMINI_API_BASE:
+                    for m_fb in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"):
+                        if m_fb not in modelos_gemini:
+                            modelos_gemini.append(m_fb)
+                payload_gemini = {
                     "systemInstruction": {"parts": [{"text": system}]},
                     "contents": [{"role": "user" if t["role"] == "user" else "model", "parts": [{"text": t["content"]}] + (
                         [{"inlineData": {"mimeType": "image/jpeg", "data": imagem}}] if imagem and i == len(turnos) - 1 else [])}
                         for i, t in enumerate(turnos)],
-                    "generationConfig": {"temperature": temperature, "responseMimeType": "application/json"}})
-                r.raise_for_status()
-                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    "generationConfig": {"temperature": temperature, "responseMimeType": "application/json"},
+                }
+                ultimo_r = None
+                for idx_m, mod_atual in enumerate(modelos_gemini):
+                    r = await c.post(
+                        f"{C.GEMINI_API_BASE}/models/{mod_atual}:generateContent",
+                        headers={"x-goog-api-key": key},
+                        json=payload_gemini,
+                    )
+                    ultimo_r = r
+                    if r.status_code in (404, 429, 500, 502, 503, 504) and idx_m < len(modelos_gemini) - 1:
+                        await asyncio.sleep(0.8)
+                        continue
+                    r.raise_for_status()
+                    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                if ultimo_r is not None:
+                    ultimo_r.raise_for_status()
+
             if tipo == "anthropic":
                 r = await c.post(f"{C.ANTHROPIC_API_BASE}/messages", headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, json={
                     "model": modelo, "max_tokens": 3000, "temperature": min(temperature, 1.0), "system": system,
@@ -167,10 +242,30 @@ async def _chat(con: dict, system: str, user: str, temperature: float, schema: d
                         {"type": "text", "text": turnos[-1]["content"]}]}]})
                 r.raise_for_status()
                 return r.json()["content"][0]["text"]
-        except LLMError:
-            raise
         except Exception as e:
-            raise _erro_http(e, base or tipo)
+            erro_primario = e if isinstance(e, LLMError) else _erro_http(e, base or tipo)
+            if _allow_fallback and con.get("id"):
+                try:
+                    from . import crypto, db
+                    outras = db.q(
+                        "SELECT * FROM llm_conexoes WHERE id != ? AND modelo != '' "
+                        "ORDER BY CASE WHEN tipo IN ('gemini','openrouter','openai','anthropic') THEN 0 ELSE 1 END, padrao DESC, id ASC",
+                        (con["id"],),
+                    )
+                    for alt in outras:
+                        alt_con = {**alt, "api_key": crypto.dec(alt["api_key_enc"]) if alt.get("api_key_enc") else ""}
+                        if alt_con["tipo"] in ("gemini", "anthropic", "openrouter") and not str(alt_con.get("api_key") or "").strip():
+                            continue
+                        try:
+                            return await _chat(
+                                alt_con, system, user, temperature, schema=schema,
+                                historico=historico, imagem=imagem, _allow_fallback=False
+                            )
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+            raise erro_primario
     raise LLMError(f"tipo desconhecido: {tipo}")
 
 
@@ -238,9 +333,10 @@ async def testar(con: dict) -> dict:
                         "redução no tempo de resposta, mantendo os dados em servidores próprios."}
     t0 = time.time()
     ultimo = ""
+    con_sem_id = {k: v for k, v in con.items() if k != "id"}
     for _ in range(2):
         try:
-            d = await reagir(con, "Você é um comentarista direto e objetivo.", noticia, 0.5, ultimo or None)
+            d = await reagir(con_sem_id, "Você é um comentarista direto e objetivo.", noticia, 0.5, ultimo or None)
             return {"ok": True, "segundos": round(time.time() - t0, 1), "manchete": d["manchete_curta"]}
         except ValueError as e:
             ultimo = str(e)
@@ -294,6 +390,7 @@ _REGRA_HASHTAGS = ("hashtags: 8 a 10, em português do Brasil, sem espaços e se
 INSTR_POST = f"""
 Você escreve um post de Instagram (imagem com texto + legenda) a partir de uma ideia do autor, na voz dele (descrita acima).
 Use SOMENTE o que a ideia traz e o que o perfil acima diz sobre o autor; não invente fatos, números ou histórias.
+As frases entre aspas e os "padrões" do perfil são exemplos do JEITO do autor, não texto pronto: NÃO copie nenhuma delas nem trecho seu. Escreva frases novas sobre a ideia, com o mesmo tom.
 Responda SOMENTE com JSON:
 - manchete_curta: até 10 palavras, vai em destaque no card.
 - texto_card: 2 parágrafos curtos, primeira pessoa, até 450 caracteres no total.
@@ -305,8 +402,9 @@ Português do Brasil.
 INSTR_CARROSSEL = f"""
 Você monta um carrossel de Instagram (vários slides de imagem com texto + legenda) a partir de uma ideia do autor, na voz dele (descrita acima).
 Use SOMENTE o que a ideia traz e o que o perfil acima diz sobre o autor; não invente fatos, números ou histórias.
+As frases entre aspas e os "padrões" do perfil são exemplos do JEITO do autor, não texto pronto: NÃO copie nenhuma delas nem trecho seu. Escreva frases novas sobre a ideia, com o mesmo tom.
 Responda SOMENTE com JSON:
-- slides: lista com EXATAMENTE {{n}} slides. O 1º é a capa (titulo forte de até 10 palavras; texto = subtítulo curto de até 80 caracteres, pode ficar vazio).
+- slides: lista com EXATAMENTE {{n}} slides. O 1º é a capa (titulo forte de até 10 palavras; texto = subtítulo curto de até 80 caracteres). Nenhum slide pode ter titulo ou texto vazio.
   Do 2º ao penúltimo, cada slide desenvolve UMA ideia (titulo de até 8 palavras; texto de até 220 caracteres).
   O último fecha com a chamada para ação (titulo de até 8 palavras; texto de até 160 caracteres).
 - legenda_instagram: legenda completa SEM hashtags, até 1200 caracteres, terminando com a chamada para ação.
@@ -325,11 +423,22 @@ def normalizar_hashtags(tags) -> list[str]:
     return out[:10]
 
 
+_HASHTAG = re.compile(r"#\w+", re.U)
+# hashtags no fim de uma linha (ou linha só de hashtags): é onde os modelos as escrevem, mesmo com o prompt pedindo legenda sem elas
+_HASHTAGS_NO_FIM = re.compile(r"(?:[ \t]+#\w+)+[ \t]*$|^[ \t]*(?:#\w+[ \t]*)+$", re.M | re.U)
+
+
 def montar_legenda(legenda: str, cta: str, tags: list[str]) -> str:
+    """Legenda + CTA + UM bloco de hashtags no fim. As que o modelo já escreveu no texto saem do corpo e entram no bloco, sem repetir."""
     leg = legenda.strip()
     if cta.strip() and cta.strip().lower()[:30] not in leg.lower():
         leg += "\n\n" + cta.strip()
-    return leg + ("\n\n" + " ".join(tags) if tags else "")
+    do_texto: list[str] = []
+    leg = _HASHTAGS_NO_FIM.sub(lambda m: do_texto.extend(_HASHTAG.findall(m.group(0))) or "", leg)
+    leg = re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+$", "", leg, flags=re.M)).strip()
+    no_corpo = {h.lower() for h in _HASHTAG.findall(leg)}  # hashtag no meio de uma frase fica onde está
+    todas = [t for t in normalizar_hashtags([*tags, *do_texto]) if t.lower() not in no_corpo]
+    return leg + ("\n\n" + " ".join(todas) if todas else "")
 
 
 def _estrategia(estrategia: str | None) -> str:
@@ -352,6 +461,7 @@ async def post_de_texto(con: dict, contexto: str, ideia: str, temperature: float
         raise ValueError("manchete_curta com mais de 10 palavras")
     if len(d["texto_card"]) > 600:
         raise ValueError("texto_card com mais de 600 caracteres")
+    _sem_copia(contexto, d["manchete_curta"], d["texto_card"], d["legenda_instagram"], d["cta"])
     tags = normalizar_hashtags(d.get("hashtags"))
     legenda = montar_legenda(d["legenda_instagram"], d["cta"], tags)
     if len(legenda) > 2200:
@@ -360,25 +470,69 @@ async def post_de_texto(con: dict, contexto: str, ideia: str, temperature: float
             "hashtags": tags, "legenda": legenda}
 
 
+_PALAVRA = re.compile(r"\w+", re.U)
+
+
+def _palavras(texto: str) -> list[str]:
+    return [p.lower() for p in _PALAVRA.findall(texto or "")]
+
+
+def frases_modelo(contexto: str) -> list[list[str]]:
+    """Frases de exemplo do perfil: trechos entre aspas de 4 palavras ou mais (ex.: "Minha carreira subia. Minha saúde caía.")."""
+    achadas = re.findall(r'"([^"\n]+)"|“([^”\n]+)”', contexto or "")
+    return [p for p in (_palavras(a or b) for a, b in achadas) if len(p) >= 4]
+
+
+def trecho_copiado(texto: str, contexto: str, n: int = 8) -> str | None:
+    """Primeiro trecho do texto copiado do contexto do perfil: n palavras seguidas iguais, ou uma frase de exemplo (entre aspas)
+    inteira. Compara sem pontuação e sem diferença de maiúsculas. Devolve o trecho (em minúsculas) ou None."""
+    pal, ctx = _palavras(texto), _palavras(contexto)
+    vistos = {tuple(ctx[i:i + n]) for i in range(len(ctx) - n + 1)}
+    for i in range(len(pal) - n + 1):
+        if tuple(pal[i:i + n]) in vistos:
+            return " ".join(pal[i:i + n])
+    for fr in frases_modelo(contexto):
+        for i in range(len(pal) - len(fr) + 1):
+            if pal[i:i + len(fr)] == fr:
+                return " ".join(fr)
+    return None
+
+
+def _sem_copia(contexto: str, *textos: str) -> None:
+    achado = trecho_copiado("\n".join(t for t in textos if t), contexto)
+    if achado:
+        raise ValueError(f"copiou do perfil do autor: “{achado}”. Escreva frases novas, sem repetir exemplos do perfil")
+
+
+def validar_slides(slides, n: int | None = None) -> list[dict]:
+    """Confere a lista de slides de um carrossel e devolve [{titulo, texto}] limpos.
+    ValueError (vale tentar de novo): não é lista, quantidade diferente de n, slide sem titulo ou sem texto, ou longo demais."""
+    if not isinstance(slides, list) or (n is not None and len(slides) != n):
+        raise ValueError(f"o carrossel deve ter exatamente {n} slides" if n is not None else "slides deve ser uma lista")
+    out = []
+    for i, sl in enumerate(slides, 1):
+        sl = sl if isinstance(sl, dict) else {}
+        titulo, texto = str(sl.get("titulo") or "").strip(), str(sl.get("texto") or "").strip()
+        if not titulo:
+            raise ValueError(f"slide {i} sem titulo")
+        if not texto:
+            raise ValueError(f"slide {i} sem texto: nenhum slide pode ficar vazio (a capa leva um subtítulo curto)")
+        if len(titulo.split()) > 12 or len(texto) > 320:
+            raise ValueError(f"slide {i} longo demais (titulo até 10 palavras, texto até 220 caracteres)")
+        out.append({"titulo": titulo, "texto": texto})
+    return out
+
+
 async def carrossel_de_texto(con: dict, contexto: str, ideia: str, n_slides: int = 6, temperature: float = 0.8,
                              estrategia: str | None = None, feedback: str | None = None) -> dict:
     n = max(3, min(int(n_slides), 10))
     d = parse(await _chat(con, f"{contexto.strip()}\n\n---\n{INSTR_CARROSSEL.replace('{n}', str(n))}",
                           f"Ideia do autor:\n{ideia}{_estrategia(estrategia)}{_feedback(feedback)}", temperature, SCHEMA_CARROSSEL))
-    slides = d.get("slides")
-    if not isinstance(slides, list) or len(slides) != n:
-        raise ValueError(f"o carrossel deve ter exatamente {n} slides")
-    out = []
-    for i, sl in enumerate(slides, 1):
-        titulo, texto = str((sl or {}).get("titulo", "")).strip(), str((sl or {}).get("texto", "")).strip()
-        if not titulo:
-            raise ValueError(f"slide {i} sem titulo")
-        if len(titulo.split()) > 12 or len(texto) > 320:
-            raise ValueError(f"slide {i} longo demais (titulo até 10 palavras, texto até 220 caracteres)")
-        out.append({"titulo": titulo, "texto": texto})
+    out = validar_slides(d.get("slides"), n)
     for k in ("legenda_instagram", "cta"):
         if not isinstance(d.get(k), str) or not d[k].strip():
             raise ValueError(f"campo '{k}' ausente ou vazio")
+    _sem_copia(contexto, *(f"{x['titulo']} {x['texto']}" for x in out), d["legenda_instagram"], d["cta"])
     tags = normalizar_hashtags(d.get("hashtags"))
     legenda = montar_legenda(d["legenda_instagram"], d["cta"], tags)
     if len(legenda) > 2200:

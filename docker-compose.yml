@@ -9,6 +9,7 @@ services:
     restart: unless-stopped
     environment:
       - TZ=America/Sao_Paulo
+      - PYTHONUNBUFFERED=1
     ports: ["127.0.0.1:8000:8000"]   # painel: só local
     extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
@@ -57,6 +58,29 @@ services:
               count: all
               capabilities: [gpu]
 
+  # Servidor de LLM local embutido (Ollama): baixa e roda modelos leves em CPU ou GPU
+  llm:
+    image: ollama/ollama:latest
+    container_name: icap-llm
+    restart: unless-stopped
+    ports: ["127.0.0.1:11434:11434"]
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_MAX_LOADED_MODELS=4
+      - OLLAMA_NUM_PARALLEL=4
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
 volumes:
   data:
   modelos:
+  ollama_models:
+
+

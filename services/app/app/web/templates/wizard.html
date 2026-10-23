@@ -1,0 +1,469 @@
+{% extends "base.html" %}{% block title %}Assistente de Perfil & Feeds · ic-ap{% endblock %}
+{% block body %}
+<div style="max-width:860px;margin:20px auto 60px">
+  <div style="text-align:center;margin-bottom:28px">
+    <span class="badge publicado" style="font-size:12px;padding:4px 12px">🧙 Assistente Inteligente de Onboarding</span>
+    <h1 style="margin:8px 0 4px">Configure seu Perfil & Feeds de Pautas</h1>
+    <p class="sub" style="margin:0">Configure seu nicho, feeds de notícias dedicados, tom de voz autoral e canais em menos de 2 minutos.</p>
+  </div>
+
+  <!-- Barra de Etapas Visual -->
+  <div style="display:flex;justify-content:space-between;margin-bottom:24px;position:relative">
+    <div style="position:absolute;top:18px;left:40px;right:40px;height:2px;background:var(--line);z-index:0"></div>
+    <div id="step-ind-1" class="step-indicator active">1. Identidade</div>
+    <div id="step-ind-2" class="step-indicator">2. Tom de Voz</div>
+    <div id="step-ind-3" class="step-indicator">3. Feeds & Pautas</div>
+    <div id="step-ind-4" class="step-indicator">4. Telegram</div>
+    <div id="step-ind-5" class="step-indicator">5. Conclusão</div>
+  </div>
+
+  <form method="post" action="/wizard/concluir" id="wizard-form" class="card" style="padding:28px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="feeds_meta_json" id="feeds-meta-json" value="">
+    <input type="hidden" name="meta_ai_analise" id="wiz-meta-ai-analise" value="">
+
+    <!-- ETAPA 1: Identidade -->
+    <div id="step-1" class="wizard-step">
+      <h2 style="margin-top:0">1. Quem é você no Instagram?</h2>
+      <p class="mut" style="font-size:14px;margin-top:-6px">Essas informações identificam seus posts, cards e vídeos automáticos.</p>
+      
+      <div class="row">
+        <div>
+          <label>Seu Nome ou Marca <small>(como quer ser chamado)</small></label>
+          <input name="nome" id="wiz-nome" placeholder="Ex.: Emerson Carvalho" required autofocus>
+        </div>
+        <div>
+          <label>Usuário do Instagram (@)</label>
+          <input name="handle" id="wiz-handle" placeholder="Ex.: emery.carvalho" required>
+        </div>
+      </div>
+
+      <div style="margin-top:14px">
+        <label>Qual é a sua profissão, negócio ou nicho principal?</label>
+        <input name="nicho" id="wiz-nicho" placeholder="Ex.: IA Privada On-Premise, LGPD, Infraestrutura Crítica e Segurança de Dados">
+      </div>
+
+      <div class="acts" style="justify-content:flex-end;margin-top:24px">
+        <button type="button" onclick="irParaStep(2)">Avançar: Configurar Tom de Voz →</button>
+      </div>
+    </div>
+
+    <!-- ETAPA 2: Tom de Voz e Contexto -->
+    <div id="step-2" class="wizard-step" style="display:none">
+      <h2 style="margin-top:0">2. Como a IA deve escrever seus posts?</h2>
+      <p class="mut" style="font-size:14px;margin-top:-6px">
+        O sistema nunca gera posts genéricos: ele segue o seu tom de voz pessoal. Escolha como quer definir seu contexto:
+      </p>
+
+      <div style="display:flex;gap:10px;margin-bottom:16px">
+        <button type="button" id="btn-tab-entrevista" class="sec" style="flex:1;border-color:var(--acc)" onclick="alternarMetodo('entrevista')">
+          📋 Entrevista Rápida (3 Perguntas)
+        </button>
+        <button type="button" id="btn-tab-meta" class="sec" style="flex:1" onclick="alternarMetodo('meta')">
+          🤖 Importar Relatório do Meta AI
+        </button>
+      </div>
+
+      <!-- Método A: Entrevista -->
+      <div id="box-entrevista">
+        <div class="row">
+          <div>
+            <label>Qual é o seu estilo ao falar?</label>
+            <input id="wiz-estilo" placeholder="Ex.: Direto ao ponto, técnico, assertivo, sem clichês">
+          </div>
+          <div>
+            <label>3 temas ou palavras-chave que você domina</label>
+            <input id="wiz-temas" placeholder="Ex.: IA On-Premise, LGPD, vazamento de dados corporativos">
+          </div>
+        </div>
+        <div style="margin-top:10px">
+          <label>O que você mais combate ou discorda no seu nicho? <small>(inimigo comum)</small></label>
+          <input id="wiz-inimigos" placeholder="Ex.: Empresas colando dados sigilosos no ChatGPT em nuvem pública sem compliance">
+        </div>
+        <div style="margin-top:14px">
+          <button type="button" class="sec" onclick="gerarContextoIA('entrevista')" style="background:#1d2430;border-color:var(--acc);color:var(--fg)">
+            ✨ Gerar Tom de Voz com IA Agora
+          </button>
+        </div>
+      </div>
+
+      <!-- Método B: Meta AI -->
+      <div id="box-meta" style="display:none">
+        <div class="card" style="background:#131820;border:1px dashed var(--line);margin-bottom:12px">
+          <b>Como fazer o Meta AI analisar seu perfil em 3 cliques:</b>
+          <ol style="margin:8px 0 10px 20px;font-size:13px;color:var(--mut);line-height:1.6">
+            <li>Abra o <b>Meta AI</b> no navegador: <a href="https://www.meta.ai" target="_blank" style="color:var(--acc)">meta.ai (abrir em nova aba ↗)</a></li>
+            <li>Cole o prompt abaixo no chat do Meta AI:
+              <div style="background:#0e1217;padding:8px 12px;border-radius:4px;margin:6px 0;display:flex;justify-content:space-between;align-items:center">
+                <code id="prompt-meta" style="font-size:12px;color:var(--fg)">Analise o perfil @<span id="handle-prompt">usuario</span> do Instagram e descreva em tópicos: 1. Nicho e autoridade, 2. Tom de voz e estilo, 3. Temas mais abordados e 4. Dores do público.</code>
+                <button type="button" class="sec" style="padding:2px 8px;font-size:11px" onclick="copiarPromptMeta()">Copiar</button>
+              </div>
+            </li>
+            <li>Copie a resposta do Meta AI e cole na caixa abaixo:</li>
+          </ol>
+        </div>
+        <label>Cole aqui o relatório devolvido pelo Meta AI:</label>
+        <textarea id="txt-meta-ai" rows="4" placeholder="Cole o texto da resposta do Meta AI aqui..." style="width:100%;font-size:13px"></textarea>
+        <div style="margin-top:10px">
+          <button type="button" class="sec" onclick="gerarContextoIA('meta')" style="background:#1d2430;border-color:var(--acc);color:var(--fg)">
+            ✨ Transformar Relatório em Perfil Autorizado
+          </button>
+        </div>
+      </div>
+
+      <!-- Indicador de Carregamento -->
+      <div id="loading-ia" style="display:none;margin:16px 0;text-align:center">
+        <span class="badge aviso">⏳ Sintetizando tom de voz autoral com a IA... aguarde alguns segundos.</span>
+      </div>
+
+      <!-- Resultado Gerado -->
+      <div style="margin-top:18px">
+        <label>
+          <b>Contexto e Tom de Voz Gerado</b> <small>(você pode editar ou ajustar qualquer linha)</small>
+        </label>
+        <textarea name="contexto_md" id="wiz-contexto" rows="9" style="width:100%;font-family:monospace;font-size:13px;line-height:1.5" placeholder="O documento gerado aparecerá aqui..."></textarea>
+      </div>
+
+      <div class="acts" style="justify-content:space-between;margin-top:24px">
+        <button type="button" class="sec" onclick="irParaStep(1)">← Voltar</button>
+        <button type="button" onclick="irParaStep(3)">Avançar: Feeds & Pautas →</button>
+      </div>
+    </div>
+
+    <!-- ETAPA 3: Feeds & Fontes de Notícias do Perfil -->
+    <div id="step-3" class="wizard-step" style="display:none">
+      <h2 style="margin-top:0">3. Feeds de Notícias e Palavras-Chave do seu Nicho</h2>
+      <p class="mut" style="font-size:14px;margin-top:-6px">
+        Os feeds são <b>vinculados ao seu perfil</b> para monitorar apenas pautas que você domina. Chega de notícias genéricas irrelevantes.
+      </p>
+
+      <div style="margin-bottom:18px">
+        <label><b>Palavras-chave de Filtro do seu Perfil</b> <small>(separadas por vírgula)</small></label>
+        <input name="palavras_chave" id="wiz-palavras-chave" placeholder="Ex.: ia privada, on-premise, lgpd, risco jurídico, infraestrutura, servidores locais, segurança de dados">
+        <small class="mut">Apenas notícias contendo essas palavras serão capturadas para você aprovar.</small>
+      </div>
+
+      <!-- Preview dos feeds identificados via Meta AI -->
+      <div id="meta-feeds-preview" style="display:none;margin-bottom:18px"></div>
+
+      <label style="margin-bottom:8px;display:block"><b>Pacotes de Feeds RSS Curados para seu Nicho:</b></label>
+      <div style="display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:16px">
+        {% for k, pack in pacotes_feeds.items() %}
+        <label class="card feed-pack-card" style="cursor:pointer;background:#141a24;border:1px solid var(--line);padding:14px;display:flex;gap:12px;align-items:flex-start">
+          <input type="radio" name="pacote_feeds" value="{{ k }}" {{ 'checked' if loop.first }} onchange="trocarPacote('{{ k }}')" style="margin-top:4px">
+          <div>
+            <b style="color:var(--fg);font-size:15px">{{ pack.nome }}</b>
+            <p class="mut" style="font-size:13px;margin:4px 0 0">
+              {{ pack.descricao }} ({{ pack.feeds|length }} fontes curadas)
+            </p>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
+
+      <div class="card" style="background:#0e1217;border:1px dashed var(--line);margin-bottom:12px">
+        <b>Adicionar Feed RSS Próprio (Opcional):</b>
+        <div class="row" style="margin-top:8px">
+          <div>
+            <label>Nome do Veículo / Blog</label>
+            <input name="custom_feed_nome" placeholder="Ex.: Meu Blog de TI">
+          </div>
+          <div>
+            <label>URL do RSS</label>
+            <input name="custom_feed_url" placeholder="https://site.com/feed/">
+          </div>
+        </div>
+      </div>
+
+      <div class="acts" style="justify-content:space-between;margin-top:24px">
+        <button type="button" class="sec" onclick="irParaStep(2)">← Voltar</button>
+        <button type="button" onclick="irParaStep(4)">Avançar: Telegram Facilitado →</button>
+      </div>
+    </div>
+
+    <!-- ETAPA 4: Telegram Facilitado -->
+    <div id="step-4" class="wizard-step" style="display:none">
+      <h2 style="margin-top:0">4. Aprovação no Celular via Telegram</h2>
+      <p class="mut" style="font-size:14px;margin-top:-6px">
+        Você aprova os posts clicando em botões direto no Telegram. Vamos conectar seu bot sem você precisar descobrir códigos difíceis.
+      </p>
+
+      <div class="card" style="background:#131820;margin-bottom:16px">
+        <b>Passo 1: Criar o Bot no Telegram (30 segundos)</b>
+        <p class="mut" style="font-size:13px;margin:6px 0 10px">
+          Abra o <b>@BotFather</b> oficial, envie <code>/newbot</code>, escolha um nome e copie o token que ele te mandar.
+        </p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <a href="https://t.me/BotFather?start=newbot" target="_blank" class="btn sec" style="background:#229ed9;color:#fff;border:none">
+            🤖 Abrir @BotFather no Telegram (1 Clique)
+          </a>
+        </div>
+        <div style="margin-top:12px">
+          <label>Cole aqui o Token do Bot <small>(ex.: 123456789:AAH...)</small></label>
+          <input name="telegram_token" id="wiz-tg-token" placeholder="Cole o token fornecido pelo BotFather">
+        </div>
+      </div>
+
+      <div class="card" style="background:#131820;margin-bottom:16px">
+        <b>Passo 2: Identificar seu Usuário Automaticamente (Zero Códigos)</b>
+        <p class="mut" style="font-size:13px;margin:6px 0 10px">
+          Depois de criar o bot, abra uma conversa com ele e envie qualquer mensagem (ex.: <i>Oi</i> ou <i>/start</i>). Em seguida, clique no botão abaixo para o sistema detectar você sozinho:
+        </p>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="sec" onclick="detectarChatTelegram()" id="btn-detectar-tg" style="border-color:var(--ok)">
+            ⚡ Detectar Meu Usuário Automaticamente
+          </button>
+          <span id="tg-status" style="font-size:13px"></span>
+        </div>
+        <div style="margin-top:12px">
+          <label>Chat ID <small>(preenchido automaticamente pelo botão acima)</small></label>
+          <input name="telegram_chat_id" id="wiz-tg-chat-id" placeholder="Ex.: 123456789 (o botão acima preenche sozinho)">
+        </div>
+      </div>
+
+      <div class="acts" style="justify-content:space-between;margin-top:24px">
+        <button type="button" class="sec" onclick="irParaStep(3)">← Voltar</button>
+        <button type="button" onclick="irParaStep(5)">Avançar: Finalizar Perfil →</button>
+      </div>
+    </div>
+
+    <!-- ETAPA 5: Conclusão -->
+    <div id="step-5" class="wizard-step" style="display:none">
+      <div style="text-align:center;padding:10px 0 20px">
+        <span style="font-size:48px">🎉</span>
+        <h2 style="margin:8px 0 4px">Tudo Pronto para Operar!</h2>
+        <p class="mut" style="margin:0">Seu perfil está configurado com tom de voz autoral 2026, feeds ativos e pronto para produção.</p>
+      </div>
+
+      <div class="card" style="background:#131820;margin-bottom:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:14px">
+          <div><b>Nome:</b> <span id="resumo-nome" class="mut">—</span></div>
+          <div><b>Instagram:</b> <span id="resumo-handle" class="mut">—</span></div>
+          <div><b>Feeds Selecionados:</b> <span id="resumo-feeds" class="mut">IA Privada & Cibersegurança</span></div>
+          <div><b>Telegram:</b> <span id="resumo-tg" class="mut">Não configurado</span></div>
+        </div>
+      </div>
+
+      <div style="margin:14px 0">
+        <label style="cursor:pointer">
+          <input type="checkbox" name="ativo" value="1" checked>
+          <b>Ativar este perfil imediatamente</b> (inicia agendador e varredura de pautas no feed)
+        </label>
+      </div>
+
+      <div class="acts" style="justify-content:space-between;margin-top:24px">
+        <button type="button" class="sec" onclick="irParaStep(4)">← Voltar</button>
+        <button type="submit" style="font-size:15px;padding:8px 24px">🚀 Concluir e Ativar Dashboard</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<style>
+.step-indicator {
+  position: relative;
+  z-index: 1;
+  background: var(--card);
+  border: 1px solid var(--line);
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  color: var(--mut);
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+.step-indicator.active {
+  background: var(--acc);
+  color: #fff;
+  border-color: var(--acc);
+}
+.feed-pack-card:hover {
+  border-color: var(--acc) !important;
+}
+</style>
+
+<script>
+let currentStep = 1;
+
+const PACK_KEYWORDS = {
+  {% for k, pack in pacotes_feeds.items() %}
+  "{{ k }}": {{ pack.palavras_chave|tojson }},
+  {% endfor %}
+};
+
+function trocarPacote(packId) {
+  const kw = document.getElementById('wiz-palavras-chave');
+  if (PACK_KEYWORDS[packId]) {
+    kw.value = PACK_KEYWORDS[packId];
+  }
+}
+
+function irParaStep(s) {
+  if (s === 2 && !document.getElementById('wiz-nome').value.trim()) {
+    alert('Por favor, informe seu nome antes de continuar.');
+    return;
+  }
+  document.querySelectorAll('.wizard-step').forEach(el => el.style.display = 'none');
+  document.getElementById('step-' + s).style.display = 'block';
+
+  for (let i = 1; i <= 5; i++) {
+    const ind = document.getElementById('step-ind-' + i);
+    if (ind) {
+      if (i === s) ind.classList.add('active');
+      else ind.classList.remove('active');
+    }
+  }
+
+  if (s === 2) {
+    const h = document.getElementById('wiz-handle').value.trim().replace(/^@/, '');
+    document.getElementById('handle-prompt').textContent = h || 'seu_usuario';
+  }
+
+  if (s === 3) {
+    const kwInput = document.getElementById('wiz-palavras-chave');
+    if (!kwInput.value.trim()) {
+      const nicho = document.getElementById('wiz-nicho').value.trim();
+      const temas = document.getElementById('wiz-temas').value.trim();
+      if (nicho.toLowerCase().includes('seguran') || nicho.toLowerCase().includes('lgpd') || nicho.toLowerCase().includes('privad')) {
+        trocarPacote('ia_privada_seguranca');
+      } else {
+        kwInput.value = [nicho, temas].filter(Boolean).join(', ') || PACK_KEYWORDS.ia_privada_seguranca;
+      }
+    }
+  }
+
+  if (s === 5) {
+    document.getElementById('resumo-nome').textContent = document.getElementById('wiz-nome').value;
+    document.getElementById('resumo-handle').textContent = '@' + document.getElementById('wiz-handle').value.replace(/^@/, '');
+    const tg = document.getElementById('wiz-tg-chat-id').value;
+    document.getElementById('resumo-tg').textContent = tg ? 'Conectado (ID: ' + tg + ')' : 'Pendente (pode configurar depois)';
+    const selPack = document.querySelector('input[name="pacote_feeds"]:checked');
+    document.getElementById('resumo-feeds').textContent = selPack ? selPack.parentElement.querySelector('b').textContent : 'Configurados';
+  }
+
+  currentStep = s;
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+function alternarMetodo(m) {
+  const isEntrevista = m === 'entrevista';
+  document.getElementById('box-entrevista').style.display = isEntrevista ? 'block' : 'none';
+  document.getElementById('box-meta').style.display = isEntrevista ? 'none' : 'block';
+  document.getElementById('btn-tab-entrevista').style.borderColor = isEntrevista ? 'var(--acc)' : 'transparent';
+  document.getElementById('btn-tab-meta').style.borderColor = isEntrevista ? 'transparent' : 'var(--acc)';
+}
+
+function copiarPromptMeta() {
+  const txt = document.getElementById('prompt-meta').innerText;
+  navigator.clipboard.writeText(txt).then(() => {
+    alert('Prompt copiado! Abra o Meta AI, cole e depois traga a resposta para cá.');
+  });
+}
+
+async function gerarContextoIA(tipo) {
+  const loading = document.getElementById('loading-ia');
+  const txtArea = document.getElementById('wiz-contexto');
+  loading.style.display = 'block';
+
+  const relatorioTexto = document.getElementById('txt-meta-ai') ? document.getElementById('txt-meta-ai').value : '';
+  if (tipo === 'meta') {
+    const metaHidden = document.getElementById('wiz-meta-ai-analise');
+    if (metaHidden) metaHidden.value = relatorioTexto;
+  }
+
+  const payload = {
+    tipo: tipo,
+    nome: document.getElementById('wiz-nome').value,
+    handle: document.getElementById('wiz-handle').value,
+    nicho: document.getElementById('wiz-nicho').value,
+    estilo: document.getElementById('wiz-estilo') ? document.getElementById('wiz-estilo').value : '',
+    temas: document.getElementById('wiz-temas') ? document.getElementById('wiz-temas').value : '',
+    inimigos: document.getElementById('wiz-inimigos') ? document.getElementById('wiz-inimigos').value : '',
+    relatorio_meta: relatorioTexto
+  };
+
+  try {
+    const res = await fetch('/wizard/gerar-contexto', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const dados = await res.json();
+    if (dados.ok && dados.contexto) {
+      txtArea.value = dados.contexto;
+
+      if (dados.palavras_chave) {
+        const pkInp = document.getElementById('wiz-palavras-chave');
+        if (pkInp) pkInp.value = dados.palavras_chave;
+      }
+      if (dados.nicho) {
+        const nichoInp = document.getElementById('wiz-nicho');
+        if (nichoInp && !nichoInp.value.trim()) nichoInp.value = dados.nicho;
+      }
+      if (dados.pacote_id) {
+        const rad = document.querySelector(`input[name="pacote_feeds"][value="${dados.pacote_id}"]`);
+        if (rad) {
+          rad.checked = true;
+          trocarPacote(dados.pacote_id);
+        }
+      }
+      if (dados.feeds && dados.feeds.length > 0) {
+        const feedsHidden = document.getElementById('feeds-meta-json');
+        if (feedsHidden) feedsHidden.value = JSON.stringify(dados.feeds);
+        const metaBox = document.getElementById('meta-feeds-preview');
+        if (metaBox) {
+          metaBox.style.display = 'block';
+          metaBox.innerHTML = `
+            <div style="background:#0e141e;border:1px solid var(--acc);border-radius:8px;padding:14px;margin-bottom:14px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span class="badge publicado" style="font-size:11px">✨ Meta AI</span>
+                <b style="color:var(--acc);font-size:14px">Feeds RSS em Contexto com a Análise do seu Perfil:</b>
+              </div>
+              <p class="mut" style="font-size:12px;margin:0 0 10px">Fontes curadas especificamente para <b>${dados.nicho || 'seu perfil'}</b> prontas para vincular:</p>
+              <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.6">
+                ${dados.feeds.map(f => `<li><b>${f.nome}</b> <span class="badge" style="font-size:10px">${f.tema}</span></li>`).join('')}
+              </ul>
+            </div>
+          `;
+        }
+      }
+    } else {
+      alert('Erro ao gerar: ' + (dados.erro || 'Falha desconhecida'));
+    }
+  } catch (err) {
+    alert('Erro de conexão ao gerar com IA: ' + err);
+  } finally {
+    loading.style.display = 'none';
+  }
+}
+
+async function detectarChatTelegram() {
+  const st = document.getElementById('tg-status');
+  const inp = document.getElementById('wiz-tg-chat-id');
+  const tok = document.getElementById('wiz-tg-token').value.trim();
+
+  st.textContent = '🔍 Verificando mensagens recebidas...';
+  st.style.color = 'var(--acc)';
+
+  try {
+    const res = await fetch('/wizard/telegram-detectar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: tok})
+    });
+    const d = await res.json();
+    if (d.ok && d.chat_id) {
+      inp.value = d.chat_id;
+      st.textContent = '✅ Usuário detectado: ' + (d.nome || d.username || d.chat_id);
+      st.style.color = 'var(--ok)';
+    } else {
+      st.textContent = d.erro || 'Nenhuma mensagem recente encontrada. Abra o bot, mande "Oi" e tente de novo.';
+      st.style.color = 'var(--bad)';
+    }
+  } catch (e) {
+    st.textContent = 'Erro ao verificar: ' + e;
+    st.style.color = 'var(--bad)';
+  }
+}
+</script>
+{% endblock %}
