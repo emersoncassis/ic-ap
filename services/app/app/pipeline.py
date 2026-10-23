@@ -1,5 +1,5 @@
 """Fluxo de um post: capturar -> extrair -> reagir -> renderizar -> aprovar -> publicar."""
-import asyncio, json, logging, re, shutil, sqlite3, time
+import asyncio, json, logging, re, shutil, sqlite3, threading, time
 from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -108,18 +108,30 @@ def _claim(post_id: int, de: tuple, para: str) -> bool:
                 (para, db.now(), post_id, *de)) == 1
 
 
+def _tentar_apagar(caminho: Path, tentativas: int, intervalo: float) -> bool:
+    for i in range(tentativas):
+        try:
+            caminho.unlink(missing_ok=True)
+            return True
+        except PermissionError:  # Windows não apaga arquivo ainda aberto (antivírus, indexador, ffmpeg acabando de soltar)
+            if i < tentativas - 1:
+                time.sleep(intervalo)
+    return False
+
+
 def _apagar(*nomes) -> None:
+    """Apaga arquivos de CARDS. Síncrona e com espera: em código assíncrono chame por `_apagar_async` (thread).
+    Se o Windows ainda estiver com o arquivo preso depois de ≈5 s, uma thread de fundo continua tentando por 2 min."""
     for n in nomes:
         if n and re.fullmatch(r"[0-9a-f]{32}\.(jpg|mp4)", n):
-            for tentativa in range(5):  # Windows não apaga arquivo ainda aberto (ffmpeg/Chromium acabando de soltar)
-                try:
-                    (C.CARDS / n).unlink(missing_ok=True)
-                    break
-                except PermissionError:
-                    if tentativa == 4:
-                        logging.getLogger(__name__).warning("não consegui apagar %s (em uso)", n)
-                    else:
-                        time.sleep(0.3)
+            caminho = C.CARDS / n
+            if not _tentar_apagar(caminho, 10, 0.5):
+                logging.getLogger(__name__).warning("arquivo %s em uso: vou tentar apagar em segundo plano", n)
+                threading.Thread(target=_tentar_apagar, args=(caminho, 60, 2.0), daemon=True).start()
+
+
+async def _apagar_async(*nomes) -> None:
+    await asyncio.to_thread(_apagar, *nomes)
 
 
 def arquivos_do_post(po: dict) -> list[str]:
@@ -242,7 +254,7 @@ async def _processar(post_id: int, p: dict, temperature: float, destino: str = "
             arquivo, estourou = await render.card(res["manchete_curta"], res["minha_reacao"], po["fonte"] or res["fonte"],
                                                   p["handle"], p["nome"], formato, print_uri, p)
             if estourou:
-                _apagar(arquivo)
+                await _apagar_async(arquivo)
                 feedback, arquivo = "minha_reacao não coube no card, encurte", None
                 continue
             break
@@ -282,7 +294,7 @@ async def refazer(post_id: int) -> bool:
     destino = "rascunho" if po["estado"] in ("rascunho", "agendado") else "aguardando_aprovacao"
     ok = await _processar(post_id, p, temperature=0.95, destino=destino)
     if ok:
-        _apagar_post(po)
+        await asyncio.to_thread(_apagar_post, po)
         db.log(p["id"], post_id, "refeito")
         if po["tg_message_id"] and p["telegram_chat_id"]:
             await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], "Refeito. Nova versão abaixo.")
@@ -348,7 +360,7 @@ async def descartar(post_id: int, origem: str = "painel") -> bool:
     po = post(post_id)
     if not po or not _claim(post_id, ESTADOS_ABERTOS, "descartado"):
         return False
-    _apagar_post(po)
+    await asyncio.to_thread(_apagar_post, po)
     p = perfil(po["perfil_id"])
     db.log(p["id"], post_id, "descartado", origem)
     if po["tg_message_id"] and p["telegram_chat_id"]:
@@ -940,7 +952,7 @@ async def criar_de_midia(p: dict, tipo: str, src, texto: str) -> int:
         if palavras and ped["legendar"] and arquivo.endswith(".mp4"):
             try:
                 com_legenda = await midia.legendar(arquivo, palavras, marca_mod.carregar(p)["acento"])
-                _apagar(arquivo)
+                await _apagar_async(arquivo)
                 arquivo = com_legenda
                 extras.append("legendas animadas")
             except midia.MidiaError as e:
@@ -1096,7 +1108,7 @@ async def criar_video_longo(p: dict, src, texto: str) -> list[int]:
             if palavras:
                 try:
                     com = await midia.legendar(arq, palavras, acento)
-                    _apagar(arq)
+                    await _apagar_async(arq)
                     arq = com
                 except midia.MidiaError as e:
                     avisos.append(f"⚠️ Legendas animadas falharam no {fmt}: {str(e)[:120]}")
@@ -1234,7 +1246,7 @@ async def _processar_texto(post_id: int, p: dict, temperature: float, destino: s
         n = n_slides or len(arquivos_do_post(po)) or 6
         feedback, res = None, None
         for _ in range(3):
-            _apagar(*novos)
+            await _apagar_async(*novos)
             novos = []
             try:
                 if formato == "carrossel":
@@ -1283,7 +1295,7 @@ async def _processar_texto(post_id: int, p: dict, temperature: float, destino: s
                 db.log(p["id"], post_id, "telegram_falhou", str(e))
         return True
     except Exception as e:
-        _apagar(*novos)
+        await _apagar_async(*novos)
         msg = (str(e) or type(e).__name__)[:400]
         _set(post_id, "falhou", erro=msg)
         db.log(p["id"], post_id, "falhou", msg)
@@ -1325,7 +1337,7 @@ async def _refazer_texto(po: dict) -> bool:
     destino = "rascunho" if po["estado"] in ("rascunho", "agendado") else "aguardando_aprovacao"
     ok = await _processar_texto(po["id"], p, 0.95, destino)
     if ok:
-        _apagar_post(po)
+        await asyncio.to_thread(_apagar_post, po)
         db.log(p["id"], po["id"], "refeito")
         if po["tg_message_id"] and p["telegram_chat_id"]:
             await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], "Refeito. Nova versão abaixo.")
@@ -1963,7 +1975,7 @@ async def _processar_visual(post_id: int, p: dict, destino: str = "aguardando_ap
         credito = ""
         feedback, res = None, None
         for _ in range(3):
-            _apagar(novo)
+            await _apagar_async(novo)
             novo = None
             try:
                 if po["fonte"] == FONTE_CITACAO:
@@ -2005,7 +2017,7 @@ async def _processar_visual(post_id: int, p: dict, destino: str = "aguardando_ap
                 db.log(p["id"], post_id, "telegram_falhou", str(e))
         return True
     except Exception as e:
-        _apagar(novo)
+        await _apagar_async(novo)
         msg = (str(e) or type(e).__name__)[:400]
         _set(post_id, "falhou", erro=msg)
         db.log(p["id"], post_id, "falhou", msg)
@@ -2051,7 +2063,7 @@ async def _refazer_visual(po: dict) -> bool:
     async with _GERACAO:
         ok = await _processar_visual(po["id"], p, destino)
     if ok:
-        _apagar_post(po)
+        await asyncio.to_thread(_apagar_post, po)
         db.log(p["id"], po["id"], "refeito")
         if po["tg_message_id"] and p["telegram_chat_id"]:
             await telegram.marcar(p["telegram_chat_id"], po["tg_message_id"], "Refeito. Nova versão abaixo.")
@@ -2067,7 +2079,7 @@ async def criar_meme_foto(p: dict, src, texto: str) -> int:
     res = await llm.meme_de_texto(con, p["contexto_md"], descricao)
     nome, estourou = await render.meme(src, res["topo"], res["base"], p)
     if estourou:
-        _apagar(nome)
+        await _apagar_async(nome)
         raise ValueError("o texto do meme não coube na imagem; peça de novo com uma ideia mais curta")
     pid = db.x("INSERT INTO posts(perfil_id,estado,noticia_titulo,fonte,texto,reacao,legenda,arquivo,formato,criado_em,atualizado_em)"
                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",

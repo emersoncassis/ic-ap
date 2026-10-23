@@ -82,20 +82,35 @@ O nome do volume segue o nome da pasta do projeto (`<pasta>_data`); confira com 
 ## 5. Testes
 
 ```powershell
-.\scripts\testar.ps1                  # suíte completa (158 testes; ≈7 min com Chromium e ffmpeg reais)
-.\scripts\testar.ps1 -Rapido          # só agentes e wizard
+.\scripts\testar.ps1                  # lint (ruff) + suíte completa (≈9 min com Chromium e ffmpeg reais)
+.\scripts\testar.ps1 -Rapido          # lint + só agentes e wizard
+.\scripts\testar.ps1 -Lint            # só o lint: ruff check --select F,E9
+.\scripts\testar.ps1 -SemLint         # pula o lint
 ```
 ```bash
 cd services/app && pip install -r requirements-dev.txt && python -m pytest    # Linux/macOS/Docker
 ```
 
-> A suíte foi validada em Linux. No Windows, o teste do túnel usa um `cloudflared` de mentira em shell script (`tests/conftest.py`) e deve falhar até ser adaptado; veja `CLAUDE.md`.
+> A suíte foi validada em Linux e no Windows 11 (Python 3.12, 2026-10-22: tudo verde). O `testar.ps1` roda o `ruff` antes dos testes, para quando houver erro de lint, e volta para a pasta de onde você o chamou (antes deixava o PowerShell dentro de `services\app`, o que quebrava comandos com caminho relativo logo depois).
 
 - Requisitos locais: `ffmpeg` no PATH e Chromium do Playwright (`playwright install chromium`). No Windows o `config.py` também procura o Chrome/Edge instalado.
 - **Os testes de `test_fluxo.py` dependem da ordem** (fixtures de módulo criam a senha e as conexões de LLM usadas pelos seguintes). Rode o arquivo inteiro; filtrar com `-k` isola testes que dependem de estado criado antes.
 - Todos os serviços externos (Meta, Telegram, Gemini, Higgsfield, Unsplash, Anthropic) são simulados por `tests/fake_services.py`; nenhum teste fala com a internet.
 - Os testes que precisam trocar a senha do painel usam a fixture `api_client` (restaura a senha ao final). **Não crie um segundo `TestClient(app)`** dentro da suíte: ele derruba o cliente compartilhado e trava o SQLite.
 - `python scratch/test_studio.py` valida os 6 layouts, o carregador de skills e o crítico visual de ponta a ponta.
+
+### Particularidades do Windows
+
+- **Legendas animadas (ffmpeg, filtro `ass=`):** o caminho do arquivo `.ass` precisa ir **entre aspas simples, com `/` e com o `:` do drive escapado**: `ass='C\:/Users/.../x.ass'` (`midia.legendar`). Sem as aspas o ffmpeg lê o `C` como opção e a legenda/narração falha em silêncio.
+- **Arquivos em uso:** o Windows não apaga arquivo que ainda está aberto (antivírus, indexador, ffmpeg ou Chromium acabando de soltar), e dá `WinError 32`. `pipeline._apagar` tenta por ≈5 s e, se o arquivo continuar preso, uma thread de fundo tenta por mais 2 min (só avisa no log). Em código assíncrono use `await _apagar_async(...)` (roda em thread e não trava o loop); `_apagar` continua síncrona. Testes que conferem a remoção de um arquivo devem **esperar** por ela (`esperar(...)`), não assumir que já sumiu.
+- **`data\secret.key` sem permissão POSIX:** o NTFS ignora `chmod 0o600`; no Windows a proteção vem da ACL da pasta do usuário. Por isso o teste só confere o modo `0o600` fora do Windows. Mantenha `data\` dentro do perfil do usuário e não a compartilhe.
+- **`cloudflared` falso nos testes:** `tests/conftest.py` gera um script Python e um wrapper (`.bat` no Windows, `sh` nos demais). O processo falso dorme 120 s; ao parar o túnel no Windows o `.bat` é encerrado mas o Python filho pode viver até acabar esse tempo.
+- **`ruff` e o `testar.ps1`:** `ruff==0.8.4` está no `requirements-dev.txt` e é chamado pelo `testar.ps1`. Antes do commit: `.\scripts\testar.ps1 -Lint`.
+- **Git Bash reescreve argumentos:** ao testar o ffmpeg ou outros programas pelo Git Bash, argumentos que parecem caminhos (`/Users/...`, `C:...`) são convertidos pelo MSYS. Para reproduzir um problema de caminho, chame o programa pelo Python (`subprocess`) ou pelo PowerShell.
+
+### Qualidade de modelos locais (fora da suíte)
+
+`.\.venv\Scripts\python.exe scripts\qualidade_llm.py` gera posts reais (feed e carrossel) pelo pipeline com cada modelo do Ollama e imprime a tabela comparativa (tempo, saída aceita na 1ª tentativa, trechos copiados do contexto). Usa banco temporário, não mexe nos seus dados, e salva o relatório com os textos em `scratch\qualidade_llm_<data>.md`.
 
 ## 6. Solução de problemas
 

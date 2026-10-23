@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 def make(port: int) -> FastAPI:
     app = FastAPI()
-    st = {"agente": [], "carrossel_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False, "banco": [], "voz": [], "whisper_modo": "ok", "voz_modo": "ok", "imagens": 0, "foto_modo": "ok"}
+    st = {"agente": [], "carrossel_modo": "ok", "critico_modo": "ok", "llm_turnos": [], "openai_no_format": False, "openai_keys": [], "llm_mode": "ok", "llm_users": [], "graph": [], "tg": [], "tg_updates": [], "uid": 100, "graph_fail": False, "banco": [], "voz": [], "whisper_modo": "ok", "voz_modo": "ok", "imagens": 0, "foto_modo": "ok"}
     app.state.st = st
 
     @app.get("/_st")
@@ -20,7 +20,7 @@ def make(port: int) -> FastAPI:
 
     @app.post("/_reset")
     def _reset(request: Request):
-        st.update(agente=[], carrossel_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok", higgs_video_modo="ok", voz=[], whisper_modo="ok", voz_modo="ok", foto_modo="ok", imagens=0)
+        st.update(agente=[], carrossel_modo="ok", critico_modo="ok", llm_turnos=[], llm_mode="ok", llm_users=[], graph=[], tg=[], tg_updates=[], graph_fail=False, openai_no_format=False, openai_keys=[], banco=[], higgs_modo="ok", higgs_video_modo="ok", voz=[], whisper_modo="ok", voz_modo="ok", foto_modo="ok", imagens=0)
         return {}
 
     @app.post("/_set")
@@ -82,10 +82,10 @@ def make(port: int) -> FastAPI:
             return json.dumps({**base, **r}, ensure_ascii=False)
         if "monta um carrossel" in system:
             n = int(re.search(r"EXATAMENTE (\d+) slides", system).group(1))
-            slides = [{"titulo": f"Slide {i} da ideia", "texto": ("palavra " * 50 if st["carrossel_modo"] == "estoura" and i == 2 else f"Texto curto do slide {i}.")}
-                      for i in range(1, n + 1)]
-            if st["carrossel_modo"] == "estoura":
-                st["carrossel_modo"] = "ok"
+            modo = st["carrossel_modo"]  # defeitos que valem só para a próxima resposta: estoura (slide 2 longo), vazio (slide 1 sem texto), faltando (um slide a menos)
+            slides = [{"titulo": f"Slide {i} da ideia", "texto": ("palavra " * 50 if modo == "estoura" and i == 2 else "" if modo == "vazio" and i == 1 else f"Texto curto do slide {i}.")}
+                      for i in range(1, n + (0 if modo == "faltando" else 1))]
+            st["carrossel_modo"] = "ok"
             return json.dumps({"slides": slides, "legenda_instagram": "Carrossel sobre a ideia.", "cta": "Salve este post.",
                                "hashtags": ["ia", "#Empresas", "tecnologia", "gestão", "#ia", "dados privados", "ysafe", "saude digital"]}, ensure_ascii=False)
         if "escreve um post de Instagram (imagem" in system:
@@ -137,13 +137,12 @@ def make(port: int) -> FastAPI:
                 "imagem": {"usar": False, "busca_ingles": "", "estilo_visual": ""},
             }, ensure_ascii=False)
         if "CRITICO-VISUAL" in system:
-            return json.dumps({
-                "aprovado": True,
-                "score": 9,
-                "problemas": [],
-                "sugestao_ajuste": "",
-                "layout_alternativo": "",
-            }, ensure_ascii=False)
+            reprova = st["critico_modo"] == "reprova"  # reprova só a próxima avaliação: contraste fraco
+            st["critico_modo"] = "ok"
+            crit = {k: {"ok": True, "justificativa": "ok"} for k in ("texto_cortado", "contraste", "legibilidade", "hierarquia", "safe_zone")}
+            if reprova:
+                crit["contraste"] = {"ok": False, "justificativa": "texto cinza sobre foto clara"}
+            return json.dumps({"criterios": crit, "sugestao_ajuste": "escurecer o fundo" if reprova else ""}, ensure_ascii=False)
         if "CAPTION-WRITER" in system:
             return json.dumps({
                 "hook_125": "Dado na mão da empresa: quem controla o servidor controla o jogo.",

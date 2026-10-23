@@ -5,9 +5,14 @@ Estruturado para retenção no Instagram:
 - Slides 2 ao penúltimo: Valor concentrado no início (front-loaded) sem enrolação.
 - Slide final: Payoff (resolução do aprendizado) + Duplo CTA (salvar e seguir).
 """
+from contextvars import ContextVar
 from typing import Any
 
+from .. import llm
 from .base import BaseAgente
+
+# quantidade de slides pedida na chamada em curso (ContextVar: duas chamadas ao mesmo tempo não se misturam)
+_N_PEDIDO: ContextVar[int | None] = ContextVar("carousel_n_pedido", default=None)
 
 _STR = {"type": "string"}
 _TAGS = {"type": "array", "items": _STR}
@@ -45,7 +50,7 @@ Estrutura Obrigatória de Slides (Safe Zones 1080×1350):
 1. **Slide 1 (Capa)**:
    - `tipo`: "capa"
    - `titulo`: Frase de impacto de até 10 palavras que abre um loop (curiosity gap).
-   - `texto`: Subtítulo de apoio curto (até 90 caracteres) ou vazio.
+   - `texto`: Subtítulo de apoio curto (até 90 caracteres), nunca vazio.
 2. **Slides Intermediários (Valor Front-Loaded)**:
    - `tipo`: "conteudo"
    - Entregue o insight mais forte já no Slide 2 e 3 (quem rola os primeiros 3 slides lê o carrossel inteiro).
@@ -86,29 +91,25 @@ class CarouselPlannerAgente(BaseAgente):
             f"Ideia/Tema para o Carrossel:\n{ideia}\n\n"
             f"Quantidade exata de slides solicitada: {qtd}"
         )
-        return await self.executar(
-            con=con,
-            perfil=perfil,
-            mensagem_user=user_prompt,
-            instrucoes_agente=INSTR_CAROUSEL_PLANNER,
-            temperature=temperature,
-        )
+        token = _N_PEDIDO.set(qtd)
+        try:
+            return await self.executar(
+                con=con,
+                perfil=perfil,
+                mensagem_user=user_prompt,
+                instrucoes_agente=INSTR_CAROUSEL_PLANNER,
+                temperature=temperature,
+            )
+        finally:
+            _N_PEDIDO.reset(token)
 
     def validar(self, dados: dict[str, Any]) -> list[str]:
         erros = super().validar(dados)
         if erros:
             return erros
 
-        slides = dados.get("slides")
-        if not isinstance(slides, list) or len(slides) < 3:
-            erros.append("slides deve ser uma lista com pelo menos 4 slides")
-            return erros
-
-        for i, sl in enumerate(slides, 1):
-            if not isinstance(sl, dict):
-                erros.append(f"slide {i} não é um objeto")
-                continue
-            if not sl.get("titulo"):
-                erros.append(f"slide {i} sem título")
-
+        try:
+            llm.validar_slides(dados.get("slides"), _N_PEDIDO.get())  # sem n pedido (chamada direta), só confere o conteúdo
+        except ValueError as e:
+            erros.append(str(e))
         return erros

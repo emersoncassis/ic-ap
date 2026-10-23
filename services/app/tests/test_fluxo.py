@@ -1417,7 +1417,7 @@ def test_esteira_feed_tem_frase_na_imagem_legenda_e_sem_musica(logado, fake):
 
 def test_esteira_lote_de_fotos_horarios_distintos_e_agendar_todos(logado, fake):
     configurar_perfil(logado, esteira="feed")
-    pipeline.LOTE_ESPERA_S = 1
+    pipeline.LOTE_ESPERA_S = 6  # maior que o tempo de gerar uma foto no Windows (Chromium+ffmpeg): com 1 s o resumo saía antes da 3ª foto ficar pronta
     for r in db.q("SELECT id FROM posts WHERE estado='agendado'"):
         pipeline.desagendar(r["id"])
     # o resumo conta TODOS os pendentes do Telegram: sobras de testes anteriores falsificariam a contagem

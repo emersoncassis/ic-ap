@@ -41,7 +41,7 @@ Responda SOMENTE com um JSON com os campos:
 - legenda_instagram: legenda completa com a fonte citada e 3 a 5 hashtags, até 2000 caracteres.
 - fonte: nome do veículo.
 - confianca: "alta" se a notícia é clara e você entendeu bem, "media" ou "baixa" se faltou informação.
-Regras: não invente fatos que não estejam no texto da notícia. Não reproduza trechos longos da matéria. Português do Brasil.
+Regras: não invente fatos que não estejam no texto da notícia. Não reproduza trechos longos da matéria. As frases entre aspas e os "padrões" do perfil são exemplos do JEITO do autor, não texto pronto: NÃO copie nenhuma delas nem trecho seu. Escreva frases novas sobre a ideia, com o mesmo tom. Português do Brasil.
 """.strip()
 
 DICA_DOCKER = " Se o programa roda no seu PC e este app roda no Docker, use host.docker.internal no lugar de localhost."
@@ -390,6 +390,7 @@ _REGRA_HASHTAGS = ("hashtags: 8 a 10, em português do Brasil, sem espaços e se
 INSTR_POST = f"""
 Você escreve um post de Instagram (imagem com texto + legenda) a partir de uma ideia do autor, na voz dele (descrita acima).
 Use SOMENTE o que a ideia traz e o que o perfil acima diz sobre o autor; não invente fatos, números ou histórias.
+As frases entre aspas e os "padrões" do perfil são exemplos do JEITO do autor, não texto pronto: NÃO copie nenhuma delas nem trecho seu. Escreva frases novas sobre a ideia, com o mesmo tom.
 Responda SOMENTE com JSON:
 - manchete_curta: até 10 palavras, vai em destaque no card.
 - texto_card: 2 parágrafos curtos, primeira pessoa, até 450 caracteres no total.
@@ -401,8 +402,9 @@ Português do Brasil.
 INSTR_CARROSSEL = f"""
 Você monta um carrossel de Instagram (vários slides de imagem com texto + legenda) a partir de uma ideia do autor, na voz dele (descrita acima).
 Use SOMENTE o que a ideia traz e o que o perfil acima diz sobre o autor; não invente fatos, números ou histórias.
+As frases entre aspas e os "padrões" do perfil são exemplos do JEITO do autor, não texto pronto: NÃO copie nenhuma delas nem trecho seu. Escreva frases novas sobre a ideia, com o mesmo tom.
 Responda SOMENTE com JSON:
-- slides: lista com EXATAMENTE {{n}} slides. O 1º é a capa (titulo forte de até 10 palavras; texto = subtítulo curto de até 80 caracteres, pode ficar vazio).
+- slides: lista com EXATAMENTE {{n}} slides. O 1º é a capa (titulo forte de até 10 palavras; texto = subtítulo curto de até 80 caracteres). Nenhum slide pode ter titulo ou texto vazio.
   Do 2º ao penúltimo, cada slide desenvolve UMA ideia (titulo de até 8 palavras; texto de até 220 caracteres).
   O último fecha com a chamada para ação (titulo de até 8 palavras; texto de até 160 caracteres).
 - legenda_instagram: legenda completa SEM hashtags, até 1200 caracteres, terminando com a chamada para ação.
@@ -421,11 +423,22 @@ def normalizar_hashtags(tags) -> list[str]:
     return out[:10]
 
 
+_HASHTAG = re.compile(r"#\w+", re.U)
+# hashtags no fim de uma linha (ou linha só de hashtags): é onde os modelos as escrevem, mesmo com o prompt pedindo legenda sem elas
+_HASHTAGS_NO_FIM = re.compile(r"(?:[ \t]+#\w+)+[ \t]*$|^[ \t]*(?:#\w+[ \t]*)+$", re.M | re.U)
+
+
 def montar_legenda(legenda: str, cta: str, tags: list[str]) -> str:
+    """Legenda + CTA + UM bloco de hashtags no fim. As que o modelo já escreveu no texto saem do corpo e entram no bloco, sem repetir."""
     leg = legenda.strip()
     if cta.strip() and cta.strip().lower()[:30] not in leg.lower():
         leg += "\n\n" + cta.strip()
-    return leg + ("\n\n" + " ".join(tags) if tags else "")
+    do_texto: list[str] = []
+    leg = _HASHTAGS_NO_FIM.sub(lambda m: do_texto.extend(_HASHTAG.findall(m.group(0))) or "", leg)
+    leg = re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+$", "", leg, flags=re.M)).strip()
+    no_corpo = {h.lower() for h in _HASHTAG.findall(leg)}  # hashtag no meio de uma frase fica onde está
+    todas = [t for t in normalizar_hashtags([*tags, *do_texto]) if t.lower() not in no_corpo]
+    return leg + ("\n\n" + " ".join(todas) if todas else "")
 
 
 def _estrategia(estrategia: str | None) -> str:
@@ -448,6 +461,7 @@ async def post_de_texto(con: dict, contexto: str, ideia: str, temperature: float
         raise ValueError("manchete_curta com mais de 10 palavras")
     if len(d["texto_card"]) > 600:
         raise ValueError("texto_card com mais de 600 caracteres")
+    _sem_copia(contexto, d["manchete_curta"], d["texto_card"], d["legenda_instagram"], d["cta"])
     tags = normalizar_hashtags(d.get("hashtags"))
     legenda = montar_legenda(d["legenda_instagram"], d["cta"], tags)
     if len(legenda) > 2200:
@@ -456,25 +470,69 @@ async def post_de_texto(con: dict, contexto: str, ideia: str, temperature: float
             "hashtags": tags, "legenda": legenda}
 
 
+_PALAVRA = re.compile(r"\w+", re.U)
+
+
+def _palavras(texto: str) -> list[str]:
+    return [p.lower() for p in _PALAVRA.findall(texto or "")]
+
+
+def frases_modelo(contexto: str) -> list[list[str]]:
+    """Frases de exemplo do perfil: trechos entre aspas de 4 palavras ou mais (ex.: "Minha carreira subia. Minha saúde caía.")."""
+    achadas = re.findall(r'"([^"\n]+)"|“([^”\n]+)”', contexto or "")
+    return [p for p in (_palavras(a or b) for a, b in achadas) if len(p) >= 4]
+
+
+def trecho_copiado(texto: str, contexto: str, n: int = 8) -> str | None:
+    """Primeiro trecho do texto copiado do contexto do perfil: n palavras seguidas iguais, ou uma frase de exemplo (entre aspas)
+    inteira. Compara sem pontuação e sem diferença de maiúsculas. Devolve o trecho (em minúsculas) ou None."""
+    pal, ctx = _palavras(texto), _palavras(contexto)
+    vistos = {tuple(ctx[i:i + n]) for i in range(len(ctx) - n + 1)}
+    for i in range(len(pal) - n + 1):
+        if tuple(pal[i:i + n]) in vistos:
+            return " ".join(pal[i:i + n])
+    for fr in frases_modelo(contexto):
+        for i in range(len(pal) - len(fr) + 1):
+            if pal[i:i + len(fr)] == fr:
+                return " ".join(fr)
+    return None
+
+
+def _sem_copia(contexto: str, *textos: str) -> None:
+    achado = trecho_copiado("\n".join(t for t in textos if t), contexto)
+    if achado:
+        raise ValueError(f"copiou do perfil do autor: “{achado}”. Escreva frases novas, sem repetir exemplos do perfil")
+
+
+def validar_slides(slides, n: int | None = None) -> list[dict]:
+    """Confere a lista de slides de um carrossel e devolve [{titulo, texto}] limpos.
+    ValueError (vale tentar de novo): não é lista, quantidade diferente de n, slide sem titulo ou sem texto, ou longo demais."""
+    if not isinstance(slides, list) or (n is not None and len(slides) != n):
+        raise ValueError(f"o carrossel deve ter exatamente {n} slides" if n is not None else "slides deve ser uma lista")
+    out = []
+    for i, sl in enumerate(slides, 1):
+        sl = sl if isinstance(sl, dict) else {}
+        titulo, texto = str(sl.get("titulo") or "").strip(), str(sl.get("texto") or "").strip()
+        if not titulo:
+            raise ValueError(f"slide {i} sem titulo")
+        if not texto:
+            raise ValueError(f"slide {i} sem texto: nenhum slide pode ficar vazio (a capa leva um subtítulo curto)")
+        if len(titulo.split()) > 12 or len(texto) > 320:
+            raise ValueError(f"slide {i} longo demais (titulo até 10 palavras, texto até 220 caracteres)")
+        out.append({"titulo": titulo, "texto": texto})
+    return out
+
+
 async def carrossel_de_texto(con: dict, contexto: str, ideia: str, n_slides: int = 6, temperature: float = 0.8,
                              estrategia: str | None = None, feedback: str | None = None) -> dict:
     n = max(3, min(int(n_slides), 10))
     d = parse(await _chat(con, f"{contexto.strip()}\n\n---\n{INSTR_CARROSSEL.replace('{n}', str(n))}",
                           f"Ideia do autor:\n{ideia}{_estrategia(estrategia)}{_feedback(feedback)}", temperature, SCHEMA_CARROSSEL))
-    slides = d.get("slides")
-    if not isinstance(slides, list) or len(slides) != n:
-        raise ValueError(f"o carrossel deve ter exatamente {n} slides")
-    out = []
-    for i, sl in enumerate(slides, 1):
-        titulo, texto = str((sl or {}).get("titulo", "")).strip(), str((sl or {}).get("texto", "")).strip()
-        if not titulo:
-            raise ValueError(f"slide {i} sem titulo")
-        if len(titulo.split()) > 12 or len(texto) > 320:
-            raise ValueError(f"slide {i} longo demais (titulo até 10 palavras, texto até 220 caracteres)")
-        out.append({"titulo": titulo, "texto": texto})
+    out = validar_slides(d.get("slides"), n)
     for k in ("legenda_instagram", "cta"):
         if not isinstance(d.get(k), str) or not d[k].strip():
             raise ValueError(f"campo '{k}' ausente ou vazio")
+    _sem_copia(contexto, *(f"{x['titulo']} {x['texto']}" for x in out), d["legenda_instagram"], d["cta"])
     tags = normalizar_hashtags(d.get("hashtags"))
     legenda = montar_legenda(d["legenda_instagram"], d["cta"], tags)
     if len(legenda) > 2200:

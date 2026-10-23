@@ -1,4 +1,5 @@
 """Testes unitários para o pacote de Agentes Inteligentes e Especialistas."""
+from app.agentes.critico import CRITERIOS
 from app.agentes import (
     AudienceInsightsAgente,
     BaseAgente,
@@ -301,12 +302,7 @@ def test_skills_loader_e_agentes_estudio_criativo():
     }) == []
 
     cr = CriticoAgente()
-    assert cr.validar({
-        "aprovado": True,
-        "score": 9,
-        "problemas": [],
-        "sugestao_ajuste": "",
-        "layout_alternativo": "",
-    }) == []
+    ok = {"ok": True, "justificativa": "ok"}
+    assert cr.validar({"criterios": {k: ok for k in CRITERIOS}, "sugestao_ajuste": ""}) == []
 
 

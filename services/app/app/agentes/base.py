@@ -15,6 +15,7 @@ Diretrizes Culturais e de Qualidade (Português do Brasil - 2026):
 4. Controle de travessão: no máximo 1 travessão a cada 100 palavras.
 5. Respeite estritamente o tom, as crenças e o vocabulário descritos no perfil do autor.
 6. Nunca invente fatos, métricas ou histórias que não constem na ideia ou no contexto do perfil.
+7. Frases entre aspas e "padrões" do perfil são exemplos do jeito do autor, não texto pronto: nunca copie nenhuma delas nem trecho seu; escreva frases novas no mesmo tom.
 """.strip()
 
 

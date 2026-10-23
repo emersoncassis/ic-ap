@@ -96,6 +96,8 @@ def _instrumentar(llm) -> dict:
 
 
 async def _rodar_modelo(modelo: str, base_url: str, perfil_id: int, n_posts: int, n_slides: int, db, pipeline, est: dict) -> dict:
+    from app import llm
+    contexto = db.one("SELECT contexto_md FROM perfis WHERE id=?", (perfil_id,))["contexto_md"]
     db.x("DELETE FROM llm_conexoes")
     cid = db.x("INSERT INTO llm_conexoes(nome, tipo, base_url, api_key_enc, modelo, padrao, criado_em) VALUES(?,?,?,?,?,1,?)",
                (f"Ollama {modelo}", "ollama", base_url, "", modelo, db.now()))
@@ -123,6 +125,9 @@ async def _rodar_modelo(modelo: str, base_url: str, perfil_id: int, n_posts: int
                 res = None
             item = {"n": i, "formato": formato, "ideia": ideia, "segundos": dt, "ok": bool(ids), "tentativas": est["chamadas"],
                     "invalidas": est["invalidas"], "erros": list(est["erros"]), "res": res, "erro_final": None if ids else (po or {}).get("erro")}
+            # cópia do contexto medida no texto FINAL (independe da checagem do pipeline) e rejeições por cópia durante as tentativas
+            item["copiou"] = llm.trecho_copiado(_texto_do_item(item), contexto) if res else None
+            item["rejeicoes_copia"] = sum("copiou do perfil" in e for e in item["erros"])
             itens.append(item)
             marca = "ok " if item["ok"] else "FALHOU"
             print(f"  [{i}/{n_posts}] {formato:<9} {dt:6.1f}s  tentativas={item['tentativas']}  json 1ª tentativa: "
@@ -162,6 +167,8 @@ def _tabela(resultados: list[dict]) -> str:
         linha("Carga do modelo", lambda r: f"{r['carga']:.1f}s"),
         linha("Posts gerados (ok/total)", lambda r: f"{sum(1 for i in r['itens'] if i['ok'])}/{len(r['itens'])}"),
         linha("JSON válido na 1ª tentativa", pct),
+        linha("Posts finais com trecho copiado do contexto", lambda r: f"{sum(1 for i in r['itens'] if i.get('copiou'))}/{len(r['itens'])}"),
+        linha("Saídas rejeitadas por cópia do contexto", lambda r: str(sum(i.get("rejeicoes_copia", 0) for i in r["itens"]))),
         linha("Tentativas médias por post", lambda r: f"{statistics.mean(i['tentativas'] for i in r['itens']):.2f}"),
         linha("Tempo médio · feed (legenda+card)", lambda r: media(stats(r, "feed"))),
         linha("Tempo médio · carrossel", lambda r: media(stats(r, "carrossel"))),
