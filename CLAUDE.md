@@ -27,10 +27,11 @@ Leia `docs/ARQUITETURA_E_MODULOS.md` antes de mexer. Código em `services/app/ap
 
 ## Pendências conhecidas (prioridade)
 
-1. **Windows nunca foi testado.** Rodar `testar.ps1` e corrigir o que for específico do SO. O teste do túnel cria um `cloudflared` falso em shell script (`tests/conftest.py`) e deve falhar no Windows: troque por um `.bat`/script Python portável.
+1. ~~Windows nunca testado~~ **Resolvido:** a suíte completa passa no Windows (201 testes). O `cloudflared` falso agora é um script Python com wrapper `.bat`/`sh`. Detalhes em `docs/OPERACAO.md` ("Particularidades do Windows").
 2. `.venv\` e `bin\` não vão para o git (já no `.gitignore`).
-3. Repositório sem nenhum commit: fazer o primeiro.
+3. ~~Repositório sem commit~~ **Resolvido.**
 4. Loop de aprendizado inerte (`aprendizados.registrar()` nunca é chamado; falta coletar métricas da Insights API).
 5. Dividir `main.py` (≈1.700 linhas) em `APIRouter`s e `pipeline.py` (≈2.100) em submódulos, só com a suíte verde.
 6. Arquivos obsoletos aguardando autorização para apagar: veja a seção 4 de `docs/REVISAO_2026-10-22.md`.
-7. Saída estruturada por JSON schema nos agentes, crítico com rubrica objetiva, memória de voz do perfil.
+7. Saída estruturada por JSON schema nos agentes e crítico com rubrica objetiva **já feitos**; falta a memória de voz do perfil.
+8. `context/meu_contexto.md` traz uma frase de fecho literal que o Qwen copia (veja `docs/RESULTADOS.md`); aguarda decisão do Emerson.
